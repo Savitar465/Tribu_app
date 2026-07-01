@@ -1,0 +1,72 @@
+import type { Currency, ServiceId } from "@/lib/types";
+import type { StatusKey } from "@/lib/theme";
+
+/** Row shapes as stored in Supabase (see supabase/migrations/0001_init.sql). */
+
+export interface ProfileRow {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+  mono: string | null;
+  exchange_rate: number;
+  created_at: string;
+}
+
+export interface GroupRow {
+  id: string;
+  owner_id: string;
+  service_id: ServiceId;
+  name: string;
+  amount: number;
+  currency: Currency;
+  members_target: number;
+  billing_day: number;
+  role: "admin" | "member";
+  self_status: StatusKey;
+  due: string | null;
+  created_at: string;
+}
+
+export interface ParticipantRow {
+  id: string;
+  group_id: string;
+  name: string;
+  color: string;
+  paid: boolean;
+  proof_pending: boolean;
+  is_self: boolean;
+  sort: number;
+}
+
+export interface GroupPaymentRow {
+  id: string;
+  group_id: string;
+  month: string;
+  ok: boolean;
+  sort: number;
+}
+
+export interface WalletRow {
+  user_id: string;
+  balance: number;
+  auto_fund: boolean;
+}
+
+export interface WalletTxRow {
+  id: string;
+  user_id: string;
+  label: string;
+  sub: string | null;
+  amount: number;
+  created_at: string;
+}
+
+/** Everything the app needs for the signed-in user, fetched on load. */
+export interface AppData {
+  profile: ProfileRow;
+  groups: GroupRow[];
+  participants: ParticipantRow[];
+  payments: GroupPaymentRow[];
+  wallet: WalletRow;
+  transactions: WalletTxRow[];
+}
