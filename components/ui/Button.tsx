@@ -7,6 +7,7 @@ interface ButtonProps {
   children: ReactNode;
   onClick?: () => void;
   variant?: Variant;
+  disabled?: boolean;
   style?: CSSProperties;
 }
 
@@ -39,17 +40,19 @@ const VARIANTS: Record<Variant, CSSProperties> = {
 };
 
 /** Full-width action button with design-matched variants. */
-export function Button({ children, onClick, variant = "primary", style }: ButtonProps) {
+export function Button({ children, onClick, variant = "primary", disabled, style }: ButtonProps) {
   return (
     <div
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
+      aria-disabled={disabled}
       style={{
         textAlign: "center",
         padding: 16,
         borderRadius: 16,
         fontSize: 15.5,
         fontWeight: 800,
-        cursor: "pointer",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.5 : 1,
         ...VARIANTS[variant],
         ...style,
       }}

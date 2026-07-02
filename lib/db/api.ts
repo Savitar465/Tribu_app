@@ -43,15 +43,21 @@ export async function fetchAppData(supabase: SupabaseClient, userId: string): Pr
   };
 }
 
-/** Persist an edited group cost. */
+/** Persist an edited group cost (amount, currency, members and billing day). */
 export async function updateGroupCost(
   supabase: SupabaseClient,
   groupId: string,
-  values: { amount: number; currency: Currency; members: number },
+  values: { amount: number; currency: Currency; members: number; billingDay: number; due: string },
 ): Promise<void> {
   const { error } = await supabase
     .from("groups")
-    .update({ amount: values.amount, currency: values.currency, members_target: values.members })
+    .update({
+      amount: values.amount,
+      currency: values.currency,
+      members_target: values.members,
+      billing_day: values.billingDay,
+      due: values.due,
+    })
     .eq("id", groupId);
   if (error) throw new Error(`updateGroupCost: ${error.message}`);
 }
@@ -64,6 +70,20 @@ export async function saveExchangeRate(
 ): Promise<void> {
   const { error } = await supabase.from("profiles").update({ exchange_rate: rate }).eq("id", userId);
   if (error) throw new Error(`saveExchangeRate: ${error.message}`);
+}
+
+/** Adopt the official rate and stamp the sync day (daily auto-sync). */
+export async function saveOfficialRate(
+  supabase: SupabaseClient,
+  userId: string,
+  rate: number,
+  syncedOn: string,
+): Promise<void> {
+  const { error } = await supabase
+    .from("profiles")
+    .update({ exchange_rate: rate, rate_synced_on: syncedOn })
+    .eq("id", userId);
+  if (error) throw new Error(`saveOfficialRate: ${error.message}`);
 }
 
 /** Record a deposit: set the new balance and append a movement. */
@@ -94,9 +114,12 @@ export async function setAutoFund(
   if (error) throw new Error(`setAutoFund: ${error.message}`);
 }
 
-/** Move the user's own cuota into "review" after submitting a proof. */
-export async function submitPayment(supabase: SupabaseClient, groupId: string): Promise<void> {
-  const { error } = await supabase.from("groups").update({ self_status: "review" }).eq("id", groupId);
+/** Move the user's own roster row into "review" after submitting a proof. */
+export async function submitPayment(supabase: SupabaseClient, participantId: string): Promise<void> {
+  const { error } = await supabase
+    .from("group_participants")
+    .update({ proof_pending: true, paid: false })
+    .eq("id", participantId);
   if (error) throw new Error(`submitPayment: ${error.message}`);
 }
 
@@ -125,6 +148,7 @@ export async function createGroup(
     members: number;
     billingDay: number;
     due: string;
+    color: string | null;
   },
 ): Promise<{ group: GroupRow; participants: ParticipantRow[] }> {
   const insertGroup = await supabase
@@ -140,6 +164,7 @@ export async function createGroup(
       role: "admin",
       self_status: "paid",
       due: values.due,
+      color: values.color,
     })
     .select("*")
     .single();
@@ -147,7 +172,7 @@ export async function createGroup(
 
   const insertSelf = await supabase
     .from("group_participants")
-    .insert({ group_id: group.id, name: "Tú", color: "#5b8cff", paid: true, is_self: true, sort: 0 })
+    .insert({ group_id: group.id, name: "Tú", color: "#5b8cff", paid: true, is_self: true, sort: 0, user_id: userId })
     .select("*")
     .single();
   const self = must<ParticipantRow>(insertSelf.data, insertSelf.error, "createGroup(self)");
@@ -155,8 +180,74 @@ export async function createGroup(
   return { group, participants: [self] };
 }
 
-/** Seed the sample dataset for the current user via the SECURITY INVOKER RPC. */
-export async function loadSampleData(supabase: SupabaseClient): Promise<void> {
-  const { error } = await supabase.rpc("load_sample_data");
-  if (error) throw new Error(`loadSampleData: ${error.message}`);
+/** Add a person to a group's roster. RLS lets the group owner insert freely. */
+export async function addParticipant(
+  supabase: SupabaseClient,
+  groupId: string,
+  values: { name: string; color: string; sort: number; email?: string | null; userId?: string | null },
+): Promise<ParticipantRow> {
+  const inserted = await supabase
+    .from("group_participants")
+    .insert({
+      group_id: groupId,
+      name: values.name,
+      color: values.color,
+      sort: values.sort,
+      email: values.email ?? null,
+      user_id: values.userId ?? null,
+    })
+    .select("*")
+    .single();
+  return must<ParticipantRow>(inserted.data, inserted.error, "addParticipant");
 }
+
+/** Resolve an email to an existing app user (or null) via the lookup RPC. */
+export async function findProfileByEmail(
+  supabase: SupabaseClient,
+  email: string,
+): Promise<{ id: string; full_name: string | null; mono: string | null } | null> {
+  const { data, error } = await supabase.rpc("find_profile_by_email", { p_email: email });
+  if (error) throw new Error(`findProfileByEmail: ${error.message}`);
+  return data && data.length > 0 ? data[0] : null;
+}
+
+/** Remove a person from a group's roster. */
+export async function removeParticipant(supabase: SupabaseClient, participantId: string): Promise<void> {
+  const { error } = await supabase.from("group_participants").delete().eq("id", participantId);
+  if (error) throw new Error(`removeParticipant: ${error.message}`);
+}
+
+/** Rename a roster member. */
+export async function renameParticipant(
+  supabase: SupabaseClient,
+  participantId: string,
+  name: string,
+): Promise<void> {
+  const { error } = await supabase.from("group_participants").update({ name }).eq("id", participantId);
+  if (error) throw new Error(`renameParticipant: ${error.message}`);
+}
+
+/** Swap the sort order of two roster members (two independent updates). */
+export async function reorderParticipants(
+  supabase: SupabaseClient,
+  a: { id: string; sort: number },
+  b: { id: string; sort: number },
+): Promise<void> {
+  const [ra, rb] = await Promise.all([
+    supabase.from("group_participants").update({ sort: a.sort }).eq("id", a.id),
+    supabase.from("group_participants").update({ sort: b.sort }).eq("id", b.id),
+  ]);
+  if (ra.error) throw new Error(`reorderParticipants: ${ra.error.message}`);
+  if (rb.error) throw new Error(`reorderParticipants: ${rb.error.message}`);
+}
+
+/** Update just the target member count of a group (cost split denominator). */
+export async function updateMembersTarget(
+  supabase: SupabaseClient,
+  groupId: string,
+  members: number,
+): Promise<void> {
+  const { error } = await supabase.from("groups").update({ members_target: members }).eq("id", groupId);
+  if (error) throw new Error(`updateMembersTarget: ${error.message}`);
+}
+

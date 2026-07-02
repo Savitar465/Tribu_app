@@ -65,10 +65,10 @@ export function ApproveScreen() {
       </Card>
 
       <div style={{ display: "flex", gap: 10 }}>
-        <Button variant="danger" onClick={actions.rejectCarlos} style={{ flex: 1, fontSize: 15 }}>
+        <Button variant="danger" onClick={() => actions.reviewMember(approval.id, false)} style={{ flex: 1, fontSize: 15 }}>
           Rechazar
         </Button>
-        <Button variant="success" onClick={actions.approveCarlos} style={{ flex: 1.4, fontSize: 15 }}>
+        <Button variant="success" onClick={() => actions.reviewMember(approval.id, true)} style={{ flex: 1.4, fontSize: 15 }}>
           Aprobar pago
         </Button>
       </div>

@@ -16,10 +16,8 @@ export const SERVICE_META: Record<ServiceId, ServiceMeta> = {
   max: { mono: "M", color: "#0046ff", name: "Max", plan: "Estándar", due: "12/07" },
   canva: { mono: "C", color: "#00c4cc", name: "Canva", plan: "Equipos", due: "20/07" },
   one: { mono: "G", color: "#e8a020", name: "Google One", plan: "Premium", due: "08/07" },
+  others: { mono: "+", color: "#7b8794", name: "Grupo personalizado", plan: "Personalizado", due: "05/07" },
 };
-
-/** Service ids whose dues are auto-debited from the shared fund. */
-export const FUND_COVERED: ServiceId[] = ["spotify", "netflix", "youtube", "disney"];
 
 /** Services offered when creating a new group. */
 export const CREATE_SERVICES: ServiceId[] = [
@@ -31,18 +29,24 @@ export const CREATE_SERVICES: ServiceId[] = [
   "canva",
   "chatgpt",
   "one",
+  "others",
 ];
 
-/** Scheduled auto-payments shown in the wallet (amounts resolved from live groups). */
-export const SCHEDULED: { id: ServiceId; label: string; date: string }[] = [
-  { id: "spotify", label: "Spotify Premium", date: "05 jul" },
-  { id: "netflix", label: "Netflix", date: "02 ago" },
-  { id: "youtube", label: "YouTube Premium", date: "10 ago" },
+/** Avatar colors cycled through when adding new roster members. */
+export const MEMBER_COLORS: string[] = [
+  "#5b8cff",
+  "#f5793b",
+  "#36d07a",
+  "#c56cf0",
+  "#f5b53d",
+  "#ff6b8a",
+  "#22c1c3",
+  "#8b93a3",
 ];
 
 /** Exchange-rate quick presets. */
 export const RATE_PRESETS: { v: number; label: string }[] = [
-  { v: 6.96, label: "Oficial" },
+  { v: 6.96, label: "6.96" },
   { v: 7.5, label: "7.50" },
   { v: 8.5, label: "8.50" },
 ];

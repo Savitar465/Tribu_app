@@ -9,6 +9,8 @@ export interface ProfileRow {
   email: string | null;
   mono: string | null;
   exchange_rate: number;
+  /** Day (yyyy-mm-dd) the official rate was last auto-applied; null if never. */
+  rate_synced_on: string | null;
   created_at: string;
 }
 
@@ -24,6 +26,8 @@ export interface GroupRow {
   role: "admin" | "member";
   self_status: StatusKey;
   due: string | null;
+  /** Optional per-group brand color (custom "others" groups); null → use service color. */
+  color: string | null;
   created_at: string;
 }
 
@@ -36,6 +40,10 @@ export interface ParticipantRow {
   proof_pending: boolean;
   is_self: boolean;
   sort: number;
+  /** Email the member was added with (null for plain name-only members). */
+  email: string | null;
+  /** Linked profile id when the email belongs to an existing app user. */
+  user_id: string | null;
 }
 
 export interface GroupPaymentRow {

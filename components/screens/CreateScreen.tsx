@@ -1,9 +1,10 @@
 import { Avatar } from "@/components/ui/Avatar";
 import { Button } from "@/components/ui/Button";
+import { CurrencyToggle } from "@/components/ui/CurrencyToggle";
 import { SectionLabel } from "@/components/ui/SectionLabel";
 import { TextField } from "@/components/ui/TextField";
 import { ScreenShell } from "@/components/screens/ScreenShell";
-import { CREATE_SERVICES, SERVICE_META } from "@/lib/data";
+import { CREATE_SERVICES, MEMBER_COLORS, SERVICE_META } from "@/lib/data";
 import { getCreateView } from "@/lib/selectors";
 import { useApp } from "@/lib/store";
 import { ACCENT, colors } from "@/lib/theme";
@@ -19,6 +20,7 @@ const SHORT_LABEL: Record<ServiceId, string> = {
   canva: "Canva",
   chatgpt: "ChatGPT",
   one: "Google One",
+  others: "Otros",
 };
 
 /** Create-group flow: pick a service, set plan details, preview the per-member cost. */
@@ -37,14 +39,45 @@ export function CreateScreen() {
 
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <TextField
-          label="Nombre del plan"
+          label={state.selService === "others" ? "Nombre del grupo" : "Nombre del plan"}
           value={state.createName}
           onChange={(v) => actions.setCreate("name", v)}
           fontWeight={600}
         />
+
+        {state.selService === "others" && (
+          <div>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: colors.textMuted, marginBottom: 8 }}>
+              Color del grupo
+            </div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {MEMBER_COLORS.map((c) => (
+                <div
+                  key={c}
+                  onClick={() => actions.setCreateColor(c)}
+                  style={{
+                    width: 30,
+                    height: 30,
+                    borderRadius: "50%",
+                    background: c,
+                    cursor: "pointer",
+                    border: state.createColor === c ? `2.5px solid ${colors.textPrimary}` : "2.5px solid transparent",
+                    boxShadow: state.createColor === c ? `0 0 0 2px ${c}` : "none",
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: colors.textMuted, marginBottom: 7 }}>Moneda del cobro</div>
+          <CurrencyToggle value={state.createCur} onChange={actions.setCreateCur} />
+        </div>
+
         <div style={{ display: "flex", gap: 12 }}>
           <TextField
-            label="Costo mensual (Bs)"
+            label={`Costo mensual (${state.createCur === "USD" ? "USD" : "Bs"})`}
             value={state.createAmount}
             onChange={(v) => actions.setCreate("amount", v)}
             inputMode="decimal"
@@ -88,6 +121,12 @@ export function CreateScreen() {
           <span style={{ fontSize: 13, color: colors.textMuted, fontWeight: 600 }}>/mes</span>
         </div>
       </div>
+
+      {view.isUsd && state.officialRate !== null && (
+        <div style={{ fontSize: 12, color: colors.textMuted, textAlign: "center", marginBottom: 18, marginTop: -8 }}>
+          Convertido al oficial BCB · 1 USD = {state.officialRate} Bs
+        </div>
+      )}
 
       <Button onClick={actions.createGroup}>Crear grupo e invitar</Button>
     </ScreenShell>

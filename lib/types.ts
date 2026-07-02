@@ -12,7 +12,8 @@ export type ServiceId =
   | "chatgpt"
   | "max"
   | "canva"
-  | "one";
+  | "one"
+  | "others";
 
 /** Static, presentational metadata for a service (name, monogram, brand color). */
 export interface ServiceMeta {

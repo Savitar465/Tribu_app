@@ -57,6 +57,19 @@ export function EditScreen() {
         <Stepper label="+" onClick={() => actions.bumpMembers(1)} />
       </div>
 
+      <div style={{ ...fieldLabel, margin: "16px 0 7px" }}>Día de cobro cada mes</div>
+      <TextField
+        value={state.editBillingDay}
+        onChange={actions.setEditBillingDay}
+        inputMode="numeric"
+        fontWeight={700}
+        fontSize={18}
+        inputStyle={{ padding: 14 }}
+      />
+      <div style={{ fontSize: 11.5, color: colors.textMuted, marginTop: 6 }}>
+        Se cobra el día {state.editBillingDay || "—"} de cada mes.
+      </div>
+
       {/* FX shortcut */}
       <div
         onClick={actions.openFx}

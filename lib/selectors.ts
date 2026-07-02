@@ -1,4 +1,4 @@
-import { FUND_COVERED, SCHEDULED, SERVICE_META } from "./data";
+import { SERVICE_META } from "./data";
 import { fmtBs, fmtUsd, pct } from "./format";
 import { BACK_TITLE } from "./navigation";
 import type { State } from "./store";
@@ -22,18 +22,31 @@ export function buildGroup(state: State, group: GroupRow): GroupView {
   const meta = SERVICE_META[group.service_id];
   const rate = state.profile.exchange_rate;
   const k = costOf(group, rate);
-  const owned = group.role === "admin";
+  const owned = group.owner_id === state.profile.id;
+  // The viewer's own roster row (owner or member) drives their cuota status.
+  const myRow = state.participants.find((p) => p.group_id === group.id && p.user_id === state.profile.id);
+  const statusKey: StatusKey = myRow
+    ? myRow.proof_pending
+      ? "review"
+      : myRow.paid
+        ? "paid"
+        : "pending"
+    : group.self_status;
+  // Custom ("others") groups carry their own color and derive a monogram from the name.
+  const color = group.color ?? meta.color;
+  const mono =
+    group.service_id === "others" ? group.name.trim().charAt(0).toUpperCase() || meta.mono : meta.mono;
 
   const view: GroupView = {
     id: group.id,
     serviceId: group.service_id,
-    mono: meta.mono,
-    color: meta.color,
+    mono,
+    color,
     name: group.name || meta.name,
     plan: meta.plan,
     due: group.due ?? meta.due,
     owned,
-    statusKey: group.self_status,
+    statusKey,
     cuota: fmtBs(k.per),
     monthly: fmtBs(k.totalBs),
     members: String(group.members_target),
@@ -77,7 +90,7 @@ export function isPayable(group: GroupView): boolean {
 export function getProfileView(state: State) {
   const p = state.profile;
   const fullName = p.full_name || p.email || "Usuario";
-  const owned = state.groups.filter((g) => g.role === "admin").length;
+  const owned = state.groups.filter((g) => g.owner_id === state.profile.id).length;
   return {
     name: fullName.split(/\s+/)[0],
     fullName,
@@ -110,7 +123,10 @@ export function getMembers(state: State, accent: string) {
   const g = getCurrentGroup(state);
   if (!g) return [];
   return participantsOf(state, g.id).map((m) => ({
+    id: m.id,
+    isSelf: m.is_self,
     name: m.name,
+    sub: m.email ?? "",
     av: m.is_self ? accent : m.color,
     paid: m.paid,
     stLabel: m.paid ? "Pagado" : "Pendiente",
@@ -125,7 +141,7 @@ export function getApproval(state: State) {
   if (!g) return null;
   const p = participantsOf(state, g.id).find((x) => x.proof_pending);
   if (!p) return null;
-  return { name: p.name, groupName: g.name, cuota: g.cuota, plan: g.plan };
+  return { id: p.id, name: p.name, groupName: g.name, cuota: g.cuota, plan: g.plan };
 }
 
 /** Dashboard aggregates across all groups. */
@@ -169,17 +185,17 @@ export function getDashboard(state: State) {
 /** Wallet screen figures. */
 export function getWallet(state: State) {
   const rate = state.profile.exchange_rate;
-  const perOfService = (serviceId: string) => {
-    const g = state.groups.find((x) => x.service_id === serviceId);
-    return g ? costOf(g, rate).per : 0;
-  };
-
-  const monthlyCommit = FUND_COVERED.reduce((a, id) => a + perOfService(id), 0);
-  const scheduled = SCHEDULED.filter((x) => state.groups.some((g) => g.service_id === x.id)).map((x) => ({
-    ...x,
-    color: SERVICE_META[x.id].color,
-    mono: SERVICE_META[x.id].mono,
-    amount: fmtBs(perOfService(x.id)),
+  // Scheduled charges and the monthly commitment are derived from the user's
+  // real groups (per-member cuota + billing due), not a hardcoded catalog.
+  const views = state.groups.map((g) => buildGroup(state, g));
+  const monthlyCommit = views.reduce((a, g) => a + g.perBs, 0);
+  const scheduled = views.map((g) => ({
+    id: g.id,
+    label: g.name,
+    date: g.due,
+    color: g.color,
+    mono: g.mono,
+    amount: g.cuota,
   }));
 
   const transactions = state.transactions.map((t) => ({
@@ -244,7 +260,18 @@ export function getActivity(state: State) {
 /** Live-calculated fields for the Edit-cost screen. */
 export function getEditView(state: State) {
   const group = state.groups.find((g) => g.id === state.editGroupId);
-  const meta = SERVICE_META[group?.service_id ?? state.selService];
+  const baseMeta = SERVICE_META[group?.service_id ?? state.selService];
+  const meta = group
+    ? {
+        ...baseMeta,
+        name: group.name || baseMeta.name,
+        color: group.color ?? baseMeta.color,
+        mono:
+          group.service_id === "others"
+            ? group.name.trim().charAt(0).toUpperCase() || baseMeta.mono
+            : baseMeta.mono,
+      }
+    : baseMeta;
   const rate = state.profile.exchange_rate;
   const amt = parseFloat(state.editAmount) || 0;
   const totalBs = state.editCur === "USD" ? amt * rate : amt;
@@ -304,7 +331,9 @@ export function getHistory(state: State) {
 export function getCreateView(state: State) {
   const amt = parseFloat(state.createAmount) || 0;
   const members = Math.max(1, parseInt(state.createMembers, 10) || 1);
-  return { perBs: fmtBs(amt / members), meta: SERVICE_META[state.selService] };
+  const rate = state.profile.exchange_rate;
+  const totalBs = state.createCur === "USD" ? amt * rate : amt;
+  return { perBs: fmtBs(totalBs / members), isUsd: state.createCur === "USD", meta: SERVICE_META[state.selService] };
 }
 
 /** Title shown in the back bar for the current screen. */

@@ -101,14 +101,14 @@ export function HomeScreen() {
           </div>
         </>
       ) : (
-        <EmptyState onCreate={() => actions.go("create")} onSample={actions.loadSample} />
+        <EmptyState onCreate={() => actions.go("create")} />
       )}
     </ScreenShell>
   );
 }
 
 /** Shown when the account has no groups yet. */
-function EmptyState({ onCreate, onSample }: { onCreate: () => void; onSample: () => void }) {
+function EmptyState({ onCreate }: { onCreate: () => void }) {
   return (
     <div style={{ textAlign: "center", padding: "40px 8px 8px" }}>
       <div
@@ -127,13 +127,10 @@ function EmptyState({ onCreate, onSample }: { onCreate: () => void; onSample: ()
       </div>
       <div style={{ fontSize: 18, fontWeight: 800, color: colors.textPrimary }}>Aún no tienes grupos</div>
       <div style={{ fontSize: 13.5, color: colors.textMuted, marginTop: 6, lineHeight: 1.5, maxWidth: 300, margin: "6px auto 0" }}>
-        Crea tu primer grupo de suscripción compartida o carga datos de ejemplo para explorar la app.
+        Crea tu primer grupo de suscripción compartida para empezar a repartir costos.
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 24 }}>
         <Button onClick={onCreate}>Crear un grupo</Button>
-        <Button variant="secondary" onClick={onSample} style={{ padding: 15, fontSize: 14.5, fontWeight: 700 }}>
-          Cargar datos de ejemplo
-        </Button>
       </div>
     </div>
   );

@@ -1,6 +1,5 @@
 import { Button } from "@/components/ui/Button";
 import { ScreenShell } from "@/components/screens/ScreenShell";
-import { RATE_PRESETS } from "@/lib/data";
 import { useApp } from "@/lib/store";
 import { colors } from "@/lib/theme";
 
@@ -44,29 +43,37 @@ export function FxScreen() {
         <div style={{ fontSize: 16, color: colors.textMuted, fontWeight: 700 }}>Bolivianos</div>
       </div>
 
-      {/* Presets */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 22 }}>
-        {RATE_PRESETS.map((p) => (
-          <div
-            key={p.label}
-            onClick={() => actions.presetRate(p.v)}
-            style={{
-              flex: 1,
-              textAlign: "center",
-              padding: 11,
-              borderRadius: 12,
-              fontSize: 13,
-              fontWeight: 700,
-              cursor: "pointer",
-              background: colors.surface,
-              border: `1px solid ${colors.border}`,
-              color: colors.textSecondary,
-            }}
-          >
-            {p.label}
+      {/* Official BCB rate */}
+      {state.officialRate !== null && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "12px 16px",
+            borderRadius: 14,
+            marginBottom: 12,
+            background: "rgba(54,208,122,0.08)",
+            border: "1px solid rgba(54,208,122,0.2)",
+          }}
+        >
+          <div style={{ fontSize: 12.5, color: "#aeb6c6", fontWeight: 600 }}>
+            Oficial BCB{state.officialFecha ? ` · ${state.officialFecha}` : ""}
           </div>
-        ))}
-      </div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: colors.positive }}>
+            1 USD = {state.officialRate} Bs
+          </div>
+        </div>
+      )}
+
+      <Button
+        variant="secondary"
+        onClick={actions.fetchOfficialRate}
+        disabled={state.rateLoading}
+        style={{ marginBottom: 12, padding: 14, fontSize: 14 }}
+      >
+        {state.rateLoading ? "Obteniendo..." : "Usar tipo de cambio oficial (BCB)"}
+      </Button>
 
       <div
         style={{
@@ -81,7 +88,8 @@ export function FxScreen() {
         }}
       >
         Se usa para convertir los planes cobrados en dólares (como ChatGPT Team) a bolivianos, y para acreditar al
-        fondo común los depósitos hechos en USD.
+        fondo común los depósitos hechos en USD. El tipo de cambio oficial se obtiene del Banco Central de Bolivia;
+        revisa el valor y pulsa Guardar para aplicarlo.
       </div>
 
       <Button variant="primary" onClick={actions.saveRate}>

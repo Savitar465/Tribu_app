@@ -7,6 +7,7 @@ import { MemberRow } from "@/components/ui/MemberRow";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { SectionLabel } from "@/components/ui/SectionLabel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import { TextField } from "@/components/ui/TextField";
 import { ScreenShell } from "@/components/screens/ScreenShell";
 import { getApproval, getCurrentGroup, getMembers, isPayable, statusStyle } from "@/lib/selectors";
 import { useApp } from "@/lib/store";
@@ -95,7 +96,7 @@ function MemberDetail({ group, members }: { group: GroupView; members: Members }
       <SectionLabel>Miembros del grupo</SectionLabel>
       <Card padding="6px 14px">
         {members.map((m, i) => (
-          <MemberRow key={m.name} {...m} last={i === members.length - 1} />
+          <MemberRow key={m.id} {...m} last={i === members.length - 1} />
         ))}
       </Card>
 
@@ -113,7 +114,7 @@ type Approval = ReturnType<typeof getApproval>;
 
 /** The view an admin sees: collection progress, approvals, roster and cost editing. */
 function AdminDetail({ group, members, approval }: { group: GroupView; members: Members; approval: Approval }) {
-  const { actions } = useApp();
+  const { state, actions } = useApp();
   const admin = group.admin;
 
   return (
@@ -172,11 +173,55 @@ function AdminDetail({ group, members, approval }: { group: GroupView; members: 
         <SectionLabel style={{ marginBottom: 0 }}>Miembros · {group.members}</SectionLabel>
         <div style={{ fontSize: 13, fontWeight: 700, color: ACCENT }}>{group.cuota} c/u</div>
       </div>
-      <Card padding="6px 14px" style={{ marginBottom: 18 }}>
+      <Card padding="6px 14px" style={{ marginBottom: 12 }}>
         {members.map((m, i) => (
-          <MemberRow key={m.name} {...m} last={i === members.length - 1} />
+          <MemberRow
+            key={m.id}
+            {...m}
+            last={i === members.length - 1}
+            onTogglePaid={() => actions.setMemberPaid(m.id, !m.paid)}
+            onRename={m.isSelf ? undefined : (name) => actions.renameMember(m.id, name)}
+            onMoveUp={i > 0 ? () => actions.moveMember(m.id, -1) : undefined}
+            onMoveDown={i < members.length - 1 ? () => actions.moveMember(m.id, 1) : undefined}
+            onRemove={m.isSelf ? undefined : () => actions.removeMember(m.id)}
+          />
         ))}
       </Card>
+
+      {/* Add a person by name */}
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-end", marginBottom: 10 }}>
+        <TextField
+          label="Agregar persona"
+          value={state.memberDraft}
+          onChange={actions.setMemberDraft}
+          style={{ flex: 1 }}
+        />
+        <Button
+          onClick={actions.addMember}
+          disabled={!state.memberDraft.trim()}
+          style={{ width: 52, padding: 0, height: 46, fontSize: 24, fontWeight: 700 }}
+        >
+          +
+        </Button>
+      </div>
+
+      {/* Add by email / existing app user */}
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-end", marginBottom: 18 }}>
+        <TextField
+          label="Agregar por correo"
+          value={state.memberEmail}
+          onChange={actions.setMemberEmail}
+          inputMode="text"
+          style={{ flex: 1 }}
+        />
+        <Button
+          onClick={actions.addMemberByEmail}
+          disabled={!state.memberEmail.trim()}
+          style={{ width: 52, padding: 0, height: 46, fontSize: 24, fontWeight: 700 }}
+        >
+          +
+        </Button>
+      </div>
 
       {/* Edit cost */}
       <div
@@ -200,14 +245,9 @@ function AdminDetail({ group, members, approval }: { group: GroupView; members: 
         <span style={{ fontSize: 14, fontWeight: 800, color: colors.textSecondary }}>{group.monthly} ›</span>
       </div>
 
-      <div style={{ display: "flex", gap: 10 }}>
-        <Button variant="secondary" onClick={() => actions.go("history")} style={{ flex: 1, padding: 14, fontSize: 13.5, fontWeight: 700 }}>
-          Historial
-        </Button>
-        <Button variant="secondary" style={{ flex: 1, padding: 14, fontSize: 13.5, fontWeight: 700 }}>
-          Reporte
-        </Button>
-      </div>
+      <Button variant="secondary" onClick={() => actions.go("history")} style={{ padding: 14, fontSize: 13.5, fontWeight: 700 }}>
+        Ver historial de pagos
+      </Button>
     </div>
   );
 }
