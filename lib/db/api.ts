@@ -4,6 +4,7 @@ import type {
   AppData,
   GroupPaymentRow,
   GroupRow,
+  NotificationRow,
   ParticipantRow,
   ProfileRow,
   WalletRow,
@@ -24,13 +25,14 @@ function must<T>(data: T | null, error: { message: string } | null, what: string
 
 /** Fetch the full app dataset for a user in parallel. */
 export async function fetchAppData(supabase: SupabaseClient, userId: string): Promise<AppData> {
-  const [profile, groups, participants, payments, wallet, transactions] = await Promise.all([
+  const [profile, groups, participants, payments, wallet, transactions, notifications] = await Promise.all([
     supabase.from("profiles").select("*").eq("id", userId).single(),
     supabase.from("groups").select("*").order("created_at", { ascending: true }),
     supabase.from("group_participants").select("*").order("sort", { ascending: true }),
     supabase.from("group_payments").select("*").order("sort", { ascending: true }),
     supabase.from("wallets").select("*").eq("user_id", userId).single(),
     supabase.from("wallet_transactions").select("*").order("created_at", { ascending: false }),
+    supabase.from("notifications").select("*").order("created_at", { ascending: false }).limit(50),
   ]);
 
   return {
@@ -40,14 +42,68 @@ export async function fetchAppData(supabase: SupabaseClient, userId: string): Pr
     payments: must<GroupPaymentRow[]>(payments.data, payments.error, "payments"),
     wallet: must<WalletRow>(wallet.data, wallet.error, "wallet"),
     transactions: must<WalletTxRow[]>(transactions.data, transactions.error, "transactions"),
+    notifications: must<NotificationRow[]>(notifications.data, notifications.error, "notifications"),
   };
+}
+
+/** The signed-in user's notification feed (newest first). */
+export async function fetchNotifications(supabase: SupabaseClient): Promise<NotificationRow[]> {
+  const { data, error } = await supabase
+    .from("notifications")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(50);
+  return must<NotificationRow[]>(data, error, "fetchNotifications");
+}
+
+/** Insert charge notifications for a group's members (admin-only via RLS). */
+export async function insertNotifications(
+  supabase: SupabaseClient,
+  rows: { user_id: string; group_id: string; title: string; body: string }[],
+): Promise<void> {
+  if (rows.length === 0) return;
+  const { error } = await supabase.from("notifications").insert(rows);
+  if (error) throw new Error(`insertNotifications: ${error.message}`);
+}
+
+/** Stamp a group's processed billing cycle and freeze the charged cuota (Bs). */
+export async function markGroupBilled(
+  supabase: SupabaseClient,
+  groupId: string,
+  cycle: string,
+  cuota: number,
+): Promise<void> {
+  const { error } = await supabase
+    .from("groups")
+    .update({ billed_cycle: cycle, billed_cuota: cuota })
+    .eq("id", groupId);
+  if (error) throw new Error(`markGroupBilled: ${error.message}`);
+}
+
+/** Mark all of the user's notifications as read. */
+export async function markNotificationsRead(supabase: SupabaseClient, userId: string): Promise<void> {
+  const { error } = await supabase
+    .from("notifications")
+    .update({ read: true })
+    .eq("user_id", userId)
+    .eq("read", false);
+  if (error) throw new Error(`markNotificationsRead: ${error.message}`);
 }
 
 /** Persist an edited group cost (amount, currency, members and billing day). */
 export async function updateGroupCost(
   supabase: SupabaseClient,
   groupId: string,
-  values: { amount: number; currency: Currency; members: number; billingDay: number; due: string },
+  values: {
+    amount: number;
+    currency: Currency;
+    members: number;
+    billingDay: number;
+    due: string;
+    round: boolean;
+    /** New frozen cuota when the group was already billed this cycle (null clears the freeze). */
+    billedCuota: number | null;
+  },
 ): Promise<void> {
   const { error } = await supabase
     .from("groups")
@@ -57,6 +113,8 @@ export async function updateGroupCost(
       members_target: values.members,
       billing_day: values.billingDay,
       due: values.due,
+      round_cuota: values.round,
+      billed_cuota: values.billedCuota,
     })
     .eq("id", groupId);
   if (error) throw new Error(`updateGroupCost: ${error.message}`);
@@ -209,6 +267,21 @@ export async function findProfileByEmail(
   const { data, error } = await supabase.rpc("find_profile_by_email", { p_email: email });
   if (error) throw new Error(`findProfileByEmail: ${error.message}`);
   return data && data.length > 0 ? data[0] : null;
+}
+
+/** A registered user surfaced by the member-search field. */
+export interface ProfileMatch {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+  mono: string | null;
+}
+
+/** Search registered users by name or email (for the add-member modal). */
+export async function searchProfiles(supabase: SupabaseClient, query: string): Promise<ProfileMatch[]> {
+  const { data, error } = await supabase.rpc("search_profiles", { p_query: query });
+  if (error) throw new Error(`searchProfiles: ${error.message}`);
+  return data ?? [];
 }
 
 /** Remove a person from a group's roster. */

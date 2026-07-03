@@ -28,6 +28,23 @@ export interface GroupRow {
   due: string | null;
   /** Optional per-group brand color (custom "others" groups); null → use service color. */
   color: string | null;
+  /** Round each member's cuota up to the next whole Bs. */
+  round_cuota: boolean;
+  /** Last billing cycle processed for this group (yyyy-mm); null if never. */
+  billed_cycle: string | null;
+  /** Per-member cuota (Bs) frozen at the rate captured on the billing day. */
+  billed_cuota: number | null;
+  created_at: string;
+}
+
+/** A per-user feed entry (e.g. a monthly charge announcement). */
+export interface NotificationRow {
+  id: string;
+  user_id: string;
+  group_id: string | null;
+  title: string;
+  body: string;
+  read: boolean;
   created_at: string;
 }
 
@@ -77,4 +94,5 @@ export interface AppData {
   payments: GroupPaymentRow[];
   wallet: WalletRow;
   transactions: WalletTxRow[];
+  notifications: NotificationRow[];
 }

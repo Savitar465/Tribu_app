@@ -1,14 +1,20 @@
+import { useEffect } from "react";
 import { Avatar } from "@/components/ui/Avatar";
 import { Card } from "@/components/ui/Card";
 import { ScreenShell } from "@/components/screens/ScreenShell";
 import { getActivity } from "@/lib/selectors";
 import { useApp } from "@/lib/store";
-import { colors } from "@/lib/theme";
+import { ACCENT, colors } from "@/lib/theme";
 
-/** Activity feed: reminders, pending dues and proofs awaiting review. */
+/** Activity feed: charge notifications, reminders, dues and proofs awaiting review. */
 export function NotificationsScreen() {
   const { state, actions } = useApp();
   const activity = getActivity(state);
+
+  // Opening the feed marks everything as read (clears the bell badge).
+  useEffect(() => {
+    actions.markActivityRead();
+  }, [actions]);
 
   return (
     <ScreenShell>
@@ -22,9 +28,14 @@ export function NotificationsScreen() {
             <div style={{ display: "flex", gap: 12 }}>
               <Avatar label={n.mono} background={n.color} size={40} radius={12} fontSize={14} />
               <div style={{ flex: 1 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                  <div style={{ fontSize: 14.5, fontWeight: 700, color: colors.textPrimary }}>{n.title}</div>
-                  <div style={{ fontSize: 11, color: colors.textFaint }}>{n.time}</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+                    {n.unread && (
+                      <span style={{ width: 7, height: 7, borderRadius: "50%", background: ACCENT, flexShrink: 0 }} />
+                    )}
+                    <div style={{ fontSize: 14.5, fontWeight: 700, color: colors.textPrimary }}>{n.title}</div>
+                  </div>
+                  <div style={{ fontSize: 11, color: colors.textFaint, flexShrink: 0 }}>{n.time}</div>
                 </div>
                 <div style={{ fontSize: 13, color: colors.textMuted, marginTop: 3, lineHeight: 1.4 }}>{n.body}</div>
               </div>

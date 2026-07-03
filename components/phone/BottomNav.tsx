@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { BellIcon, ChartIcon, HomeIcon, UserIcon, WalletIcon } from "@/components/ui/Icons";
+import { getUnreadCount } from "@/lib/selectors";
 import { useApp } from "@/lib/store";
 import { ACCENT, colors } from "@/lib/theme";
 import type { Screen } from "@/lib/types";
@@ -21,6 +22,7 @@ const TABS: Tab[] = [
 /** Bottom tab bar for the app's five top-level destinations. */
 export function BottomNav() {
   const { state, actions } = useApp();
+  const unread = getUnreadCount(state);
 
   return (
     <div
@@ -51,7 +53,30 @@ export function BottomNav() {
               color,
             }}
           >
-            {tab.icon(color)}
+            <div style={{ position: "relative" }}>
+              {tab.icon(color)}
+              {tab.screen === "notifications" && unread > 0 && (
+                <span
+                  style={{
+                    position: "absolute",
+                    top: -3,
+                    right: -6,
+                    minWidth: 15,
+                    height: 15,
+                    borderRadius: 999,
+                    background: colors.danger,
+                    color: "#fff",
+                    fontSize: 9.5,
+                    fontWeight: 800,
+                    display: "grid",
+                    placeItems: "center",
+                    padding: "0 3px",
+                  }}
+                >
+                  {unread > 9 ? "9+" : unread}
+                </span>
+              )}
+            </div>
             <span style={{ fontSize: 10, fontWeight: 700 }}>{tab.label}</span>
           </div>
         );

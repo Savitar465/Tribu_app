@@ -11,11 +11,13 @@ import {
 } from "react";
 import { createClient } from "@/utils/supabase/client";
 import * as api from "@/lib/db/api";
-import type { AppData, GroupPaymentRow, GroupRow, ParticipantRow, WalletTxRow } from "@/lib/db/types";
+import type { ProfileMatch } from "@/lib/db/api";
+import type { AppData, GroupPaymentRow, GroupRow, NotificationRow, ParticipantRow, WalletTxRow } from "@/lib/db/types";
 import { MEMBER_COLORS, SERVICE_META } from "@/lib/data";
 import { getOfficialRate } from "@/lib/rates";
-import { sanitizeNumeric } from "@/lib/format";
+import { fmtBs, sanitizeNumeric } from "@/lib/format";
 import { BACK_MAP } from "@/lib/navigation";
+import { currentCycle, getEditErrors } from "@/lib/selectors";
 import type { Currency, Screen, ServiceId } from "@/lib/types";
 
 /** Full UI state: the fetched data plus transient navigation/draft state. */
@@ -27,6 +29,7 @@ export interface State {
   payments: GroupPaymentRow[];
   wallet: AppData["wallet"];
   transactions: WalletTxRow[];
+  notifications: NotificationRow[];
 
   // --- navigation ---
   screen: Screen;
@@ -41,6 +44,8 @@ export interface State {
   editMembers: number;
   /** Draft billing day (1..31) for the group being edited. */
   editBillingDay: string;
+  /** Draft "round each cuota up to a whole Bs" flag for the group being edited. */
+  editRound: boolean;
   depAmount: string;
   depCur: Currency;
   rateDraft: string;
@@ -57,10 +62,8 @@ export interface State {
   createCur: Currency;
   /** Brand color for a custom ("others") group. */
   createColor: string;
-  /** Draft name for a new roster member being added on the group screen. */
+  /** Draft input (name or email) for the add-member modal. */
   memberDraft: string;
-  /** Draft email for adding a member by email / existing app user. */
-  memberEmail: string;
 
   // --- toast ---
   toast: string;
@@ -75,6 +78,7 @@ function initState(data: AppData): State {
     payments: data.payments,
     wallet: data.wallet,
     transactions: data.transactions,
+    notifications: data.notifications,
     screen: "home",
     agId: data.groups[0]?.id ?? null,
     selService: "spotify",
@@ -83,6 +87,7 @@ function initState(data: AppData): State {
     editCur: "BOB",
     editMembers: 1,
     editBillingDay: "5",
+    editRound: false,
     depAmount: "50",
     depCur: "BOB",
     rateDraft: String(data.profile.exchange_rate),
@@ -96,7 +101,6 @@ function initState(data: AppData): State {
     createCur: "BOB",
     createColor: MEMBER_COLORS[0],
     memberDraft: "",
-    memberEmail: "",
     toast: "",
     toastKey: 0,
   };
@@ -109,11 +113,12 @@ type Action =
   | { type: "flash"; msg: string }
   | { type: "clearToast" }
   | { type: "selectService"; id: ServiceId }
-  | { type: "openEdit"; id: string }
+  | { type: "beginEdit"; id: string }
   | { type: "setEditAmount"; value: string }
   | { type: "setEditCur"; cur: Currency }
   | { type: "bumpMembers"; delta: number }
   | { type: "setEditBillingDay"; value: string }
+  | { type: "setEditRound"; value: boolean }
   | { type: "openFx" }
   | { type: "setRateDraft"; value: string }
   | { type: "presetRate"; value: number }
@@ -127,20 +132,22 @@ type Action =
   | { type: "setCreateCur"; cur: Currency }
   | { type: "setCreateColor"; color: string }
   | { type: "setMemberDraft"; value: string }
-  | { type: "setMemberEmail"; value: string }
   // applied after a successful persist:
   | { type: "applyAddParticipant"; participant: ParticipantRow; members: number }
   | { type: "applyRemoveParticipant"; participantId: string }
   | { type: "applyRenameMember"; participantId: string; name: string }
   | { type: "applyMoveMember"; a: { id: string; sort: number }; b: { id: string; sort: number } }
   | { type: "applyMemberPaid"; participantId: string; paid: boolean }
-  | { type: "applyGroupCost"; groupId: string; amount: number; currency: Currency; members: number; billingDay: number; due: string }
+  | { type: "applyGroupCost"; groupId: string; amount: number; currency: Currency; members: number; billingDay: number; due: string; round: boolean; billedCuota: number | null }
   | { type: "applyDeposit"; balance: number; tx: WalletTxRow }
   | { type: "applyAutoFund"; value: boolean }
   | { type: "applyRate"; rate: number }
   | { type: "applySubmitPay"; participantId: string }
   | { type: "applyReview"; participantId: string; paid: boolean }
-  | { type: "applyCreateGroup"; group: GroupRow; participants: ParticipantRow[] };
+  | { type: "applyCreateGroup"; group: GroupRow; participants: ParticipantRow[] }
+  | { type: "applyBilledCycle"; groupId: string; cycle: string; cuota: number }
+  | { type: "setNotifications"; notifications: NotificationRow[] }
+  | { type: "markNotificationsRead" };
 
 function flash(state: State, msg: string): State {
   return { ...state, toast: msg, toastKey: state.toastKey + 1 };
@@ -164,17 +171,19 @@ function reducer(state: State, action: Action): State {
       // Custom groups start with a blank name so the user types their own.
       return { ...state, selService: action.id, createName: action.id === "others" ? "" : meta.name };
     }
-    case "openEdit": {
+    // Seed the cost-editor drafts from the group row (no navigation — the
+    // editor lives inline on the admin screen).
+    case "beginEdit": {
       const g = state.groups.find((x) => x.id === action.id);
       if (!g) return state;
       return {
         ...state,
-        screen: "edit",
         editGroupId: g.id,
         editAmount: String(g.amount),
         editCur: g.currency,
         editMembers: g.members_target,
         editBillingDay: String(g.billing_day),
+        editRound: g.round_cuota,
       };
     }
     case "setEditAmount":
@@ -185,6 +194,8 @@ function reducer(state: State, action: Action): State {
       return { ...state, editMembers: Math.max(1, Math.min(50, state.editMembers + action.delta)) };
     case "setEditBillingDay":
       return { ...state, editBillingDay: sanitizeNumeric(action.value) };
+    case "setEditRound":
+      return { ...state, editRound: action.value };
 
     case "openFx":
       return { ...state, screen: "fx", rateDraft: String(state.profile.exchange_rate) };
@@ -226,15 +237,13 @@ function reducer(state: State, action: Action): State {
       return { ...state, createColor: action.color };
     case "setMemberDraft":
       return { ...state, memberDraft: action.value };
-    case "setMemberEmail":
-      return { ...state, memberEmail: action.value };
 
     case "applyAddParticipant": {
       const groups = state.groups.map((g) =>
         g.id === action.participant.group_id ? { ...g, members_target: action.members } : g,
       );
       return flash(
-        { ...state, groups, participants: [...state.participants, action.participant], memberDraft: "", memberEmail: "" },
+        { ...state, groups, participants: [...state.participants, action.participant], memberDraft: "" },
         `${action.participant.name} agregado al grupo`,
       );
     }
@@ -273,10 +282,12 @@ function reducer(state: State, action: Action): State {
               members_target: action.members,
               billing_day: action.billingDay,
               due: action.due,
+              round_cuota: action.round,
+              billed_cuota: action.billedCuota,
             }
           : g,
       );
-      return flash({ ...state, groups, screen: "group" }, "Costo mensual actualizado");
+      return flash({ ...state, groups }, "Costo mensual actualizado");
     }
     case "applyDeposit":
       return flash(
@@ -301,8 +312,19 @@ function reducer(state: State, action: Action): State {
         p.id === action.participantId ? { ...p, paid: action.paid, proof_pending: false } : p,
       );
       const msg = action.paid ? "Pago aprobado · saldo actualizado" : "Comprobante rechazado";
-      return flash({ ...state, participants, screen: "group" }, msg);
+      return flash({ ...state, participants, screen: "admin" }, msg);
     }
+    case "applyBilledCycle": {
+      const groups = state.groups.map((g) =>
+        g.id === action.groupId ? { ...g, billed_cycle: action.cycle, billed_cuota: action.cuota } : g,
+      );
+      return { ...state, groups };
+    }
+    case "setNotifications":
+      return { ...state, notifications: action.notifications };
+    case "markNotificationsRead":
+      return { ...state, notifications: state.notifications.map((n) => (n.read ? n : { ...n, read: true })) };
+
     case "applyCreateGroup":
       return flash(
         {
@@ -326,12 +348,15 @@ export interface Actions {
   open: (id: string) => void;
   reviewGroup: (id: string) => void;
   selectService: (id: ServiceId) => void;
-  openEdit: (id: string) => void;
+  /** Seed the inline cost editor's drafts from a group row. */
+  beginEdit: (id: string) => void;
   setEditAmount: (value: string) => void;
   setEditCur: (cur: Currency) => void;
   bumpMembers: (delta: number) => void;
   setEditBillingDay: (value: string) => void;
-  saveEdit: () => void;
+  setEditRound: (value: boolean) => void;
+  /** Validate and persist the cost drafts. True on success. */
+  saveEdit: () => Promise<boolean>;
   openFx: () => void;
   setRateDraft: (value: string) => void;
   presetRate: (value: number) => void;
@@ -350,13 +375,20 @@ export interface Actions {
   setCreateColor: (color: string) => void;
   createGroup: () => void;
   setMemberDraft: (value: string) => void;
-  setMemberEmail: (value: string) => void;
-  addMember: () => void;
-  addMemberByEmail: () => void;
+  /** Search registered users by name or email (for the add-member modal). */
+  searchMembers: (query: string) => Promise<ProfileMatch[]>;
+  /** Add the draft (a plain name or an email) to the roster. True on success. */
+  addMember: () => Promise<boolean>;
+  /** Add a registered user found via search to the roster. True on success. */
+  addMemberUser: (profile: ProfileMatch) => Promise<boolean>;
   removeMember: (participantId: string) => void;
   setMemberPaid: (participantId: string, paid: boolean) => void;
   renameMember: (participantId: string, name: string) => void;
   moveMember: (participantId: string, dir: -1 | 1) => void;
+  /** Run due monthly charges for owned groups: refresh the official rate and notify each member. */
+  processBilling: () => void;
+  /** Mark the whole notification feed as read (on opening the activity screen). */
+  markActivityRead: () => void;
   signOut: () => void;
 }
 
@@ -402,11 +434,12 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
       open: (id) => dispatch({ type: "open", id }),
       reviewGroup: (id) => dispatch({ type: "reviewGroup", id }),
       selectService: (id) => dispatch({ type: "selectService", id }),
-      openEdit: (id) => dispatch({ type: "openEdit", id }),
+      beginEdit: (id) => dispatch({ type: "beginEdit", id }),
       setEditAmount: (value) => dispatch({ type: "setEditAmount", value }),
       setEditCur: (cur) => dispatch({ type: "setEditCur", cur }),
       bumpMembers: (delta) => dispatch({ type: "bumpMembers", delta }),
       setEditBillingDay: (value) => dispatch({ type: "setEditBillingDay", value }),
+      setEditRound: (value) => dispatch({ type: "setEditRound", value }),
       openFx: () => dispatch({ type: "openFx" }),
       setRateDraft: (value) => dispatch({ type: "setRateDraft", value }),
       presetRate: (value) => dispatch({ type: "presetRate", value }),
@@ -435,17 +468,29 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
       setCreateCur: (cur) => dispatch({ type: "setCreateCur", cur }),
       setCreateColor: (color) => dispatch({ type: "setCreateColor", color }),
       setMemberDraft: (value) => dispatch({ type: "setMemberDraft", value }),
-      setMemberEmail: (value) => dispatch({ type: "setMemberEmail", value }),
 
       saveEdit: async () => {
         const s = ref.current;
-        if (!s.editGroupId) return;
-        const amount = parseFloat(s.editAmount) || 0;
-        const day = Math.max(1, Math.min(31, parseInt(s.editBillingDay, 10) || 1));
+        if (!s.editGroupId) return false;
+        const errors = getEditErrors(s);
+        if (!errors.valid) {
+          dispatch({ type: "flash", msg: errors.amount || errors.members || errors.billingDay });
+          return false;
+        }
+        const amount = parseFloat(s.editAmount);
+        const day = parseInt(s.editBillingDay, 10);
         // Keep the existing month in the "dd/mm" due label; fall back to this month.
         const group = s.groups.find((g) => g.id === s.editGroupId);
         const mm = group?.due?.split("/")[1] ?? new Date().toLocaleDateString("en-CA").slice(5, 7);
         const due = `${String(day).padStart(2, "0")}/${mm}`;
+        // If this month's charge already ran, re-freeze the cuota at the new
+        // cost (today's rate); otherwise clear the freeze so it previews live.
+        let billedCuota: number | null = null;
+        if (group?.billed_cycle === currentCycle()) {
+          const totalBs = s.editCur === "USD" ? amount * rate() : amount;
+          const n = Math.max(1, s.editMembers);
+          billedCuota = s.editRound ? Math.ceil(totalBs / n) : totalBs / n;
+        }
         try {
           await api.updateGroupCost(supabase, s.editGroupId, {
             amount,
@@ -453,6 +498,8 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
             members: s.editMembers,
             billingDay: day,
             due,
+            round: s.editRound,
+            billedCuota,
           });
           dispatch({
             type: "applyGroupCost",
@@ -462,9 +509,13 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
             members: s.editMembers,
             billingDay: day,
             due,
+            round: s.editRound,
+            billedCuota,
           });
+          return true;
         } catch (e) {
           fail(e);
+          return false;
         }
       },
 
@@ -559,63 +610,101 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
         }
       },
 
-      addMember: async () => {
-        const s = ref.current;
-        const g = currentGroup();
-        if (!g) return;
-        const name = s.memberDraft.trim();
-        if (!name) return;
-        const roster = s.participants.filter((p) => p.group_id === g.id);
-        const sort = roster.reduce((m, p) => Math.max(m, p.sort), -1) + 1;
-        const color = MEMBER_COLORS[roster.length % MEMBER_COLORS.length];
-        // Keep the target count at least as large as the roster so the cost
-        // split and "pending" figures stay coherent (DB allows up to 50).
-        const members = Math.min(50, Math.max(g.members_target, roster.length + 1));
+      searchMembers: async (query) => {
+        const q = query.trim();
+        if (q.length < 2) return [];
         try {
-          const participant = await api.addParticipant(supabase, g.id, { name, color, sort });
-          if (members !== g.members_target) {
-            await api.updateMembersTarget(supabase, g.id, members);
-          }
-          dispatch({ type: "applyAddParticipant", participant, members });
+          return await api.searchProfiles(supabase, q);
         } catch (e) {
-          fail(e);
+          fail(e); // surface DB errors (e.g. missing RPC) instead of faking "no matches"
+          return [];
         }
       },
 
-      addMemberByEmail: async () => {
+      // Persist a new roster row (shared tail of both add paths). Keeps the
+      // target count at least as large as the roster so the cost split and
+      // "pending" figures stay coherent (DB allows up to 50).
+      addMember: async () => {
         const s = ref.current;
         const g = currentGroup();
-        if (!g) return;
-        const email = s.memberEmail.trim().toLowerCase();
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-          dispatch({ type: "flash", msg: "Ingresa un correo válido" });
-          return;
-        }
+        if (!g) return false;
+        const raw = s.memberDraft.trim();
+        if (!raw) return false;
+
+        const isEmail = raw.includes("@");
+        let name = raw;
+        let email: string | null = null;
+        let memberUserId: string | null = null;
         const roster = s.participants.filter((p) => p.group_id === g.id);
-        if (roster.some((p) => p.email?.toLowerCase() === email)) {
-          dispatch({ type: "flash", msg: "Ese correo ya está en el grupo" });
-          return;
-        }
-        const sort = roster.reduce((m, p) => Math.max(m, p.sort), -1) + 1;
-        const color = MEMBER_COLORS[roster.length % MEMBER_COLORS.length];
-        const members = Math.min(50, Math.max(g.members_target, roster.length + 1));
+
         try {
-          // Resolve to an existing app user when the email is registered.
-          const profile = await api.findProfileByEmail(supabase, email);
-          const name = profile?.full_name?.trim() || email.split("@")[0];
+          if (isEmail) {
+            email = raw.toLowerCase();
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+              dispatch({ type: "flash", msg: "Ingresa un correo válido" });
+              return false;
+            }
+            if (roster.some((p) => p.email?.toLowerCase() === email)) {
+              dispatch({ type: "flash", msg: "Ese correo ya está en el grupo" });
+              return false;
+            }
+            // Resolve to an existing app user when the email is registered.
+            const profile = await api.findProfileByEmail(supabase, email);
+            name = profile?.full_name?.trim() || email.split("@")[0];
+            memberUserId = profile?.id ?? null;
+          }
+
+          const sort = roster.reduce((m, p) => Math.max(m, p.sort), -1) + 1;
+          const color = MEMBER_COLORS[roster.length % MEMBER_COLORS.length];
+          const members = Math.min(50, Math.max(g.members_target, roster.length + 1));
           const participant = await api.addParticipant(supabase, g.id, {
             name,
             color,
             sort,
             email,
-            userId: profile?.id ?? null,
+            userId: memberUserId,
           });
           if (members !== g.members_target) {
             await api.updateMembersTarget(supabase, g.id, members);
           }
           dispatch({ type: "applyAddParticipant", participant, members });
+          return true;
         } catch (e) {
           fail(e);
+          return false;
+        }
+      },
+
+      addMemberUser: async (profile) => {
+        const s = ref.current;
+        const g = currentGroup();
+        if (!g) return false;
+        const roster = s.participants.filter((p) => p.group_id === g.id);
+        const email = profile.email?.toLowerCase() ?? null;
+        if (roster.some((p) => p.user_id === profile.id || (email && p.email?.toLowerCase() === email))) {
+          dispatch({ type: "flash", msg: "Ese usuario ya está en el grupo" });
+          return false;
+        }
+        const name = profile.full_name?.trim() || email?.split("@")[0] || "Usuario";
+        const sort = roster.reduce((m, p) => Math.max(m, p.sort), -1) + 1;
+        const color = MEMBER_COLORS[roster.length % MEMBER_COLORS.length];
+        const members = Math.min(50, Math.max(g.members_target, roster.length + 1));
+        try {
+          const participant = await api.addParticipant(supabase, g.id, {
+            name,
+            color,
+            sort,
+            email,
+            userId: profile.id,
+          });
+          if (members !== g.members_target) {
+            await api.updateMembersTarget(supabase, g.id, members);
+          }
+          dispatch({ type: "applyAddParticipant", participant, members });
+          return true;
+        } catch (e) {
+          fail(e);
+          return false;
         }
       },
 
@@ -674,6 +763,56 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
         }
       },
 
+      // Once per month per owned group, on/after its billing day: refresh the
+      // official rate (so USD cuotas are charged at today's rate), notify every
+      // member with an account, and stamp the cycle so it runs only once.
+      processBilling: async () => {
+        const now = new Date();
+        const cycle = now.toLocaleDateString("en-CA").slice(0, 7); // yyyy-mm
+        const due = ref.current.groups.filter(
+          (g) => g.owner_id === userId && g.billed_cycle !== cycle && now.getDate() >= g.billing_day,
+        );
+        if (due.length === 0) return;
+
+        await syncOfficial(true); // a charge always uses today's official rate
+        const rate = ref.current.profile.exchange_rate;
+        const month = now.toLocaleDateString("es", { month: "long" });
+
+        try {
+          for (const g of due) {
+            const totalBs = g.currency === "USD" ? g.amount * rate : g.amount;
+            const n = Math.max(1, g.members_target);
+            const per = g.round_cuota ? Math.ceil(totalBs / n) : totalBs / n;
+            const recipients = ref.current.participants.filter((p) => p.group_id === g.id && p.user_id);
+            await api.insertNotifications(
+              supabase,
+              recipients.map((p) => ({
+                user_id: p.user_id as string,
+                group_id: g.id,
+                title: `Cobro de ${g.name}`,
+                body: `Se generó el cobro de ${month}: tu cuota es ${fmtBs(per)}.`,
+              })),
+            );
+            await api.markGroupBilled(supabase, g.id, cycle, per);
+            dispatch({ type: "applyBilledCycle", groupId: g.id, cycle, cuota: per });
+          }
+          // Refresh the feed so the owner's own charge notifications appear.
+          dispatch({ type: "setNotifications", notifications: await api.fetchNotifications(supabase) });
+        } catch (e) {
+          fail(e);
+        }
+      },
+
+      markActivityRead: async () => {
+        if (!ref.current.notifications.some((n) => !n.read)) return;
+        dispatch({ type: "markNotificationsRead" }); // optimistic
+        try {
+          await api.markNotificationsRead(supabase, userId);
+        } catch (e) {
+          fail(e);
+        }
+      },
+
       signOut: async () => {
         try {
           await supabase.auth.signOut();
@@ -691,9 +830,11 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
     return () => clearTimeout(t);
   }, [state.toastKey, state.toast]);
 
-  // On load: fetch the official BCB rate (for display) and adopt it once daily.
+  // On load: fetch the official BCB rate (for display) and adopt it once daily,
+  // then run any monthly charges that came due for groups this user administers.
   useEffect(() => {
     actions.initOfficialRate();
+    actions.processBilling();
   }, [actions]);
 
   const value = useMemo(() => ({ state, actions }), [state, actions]);

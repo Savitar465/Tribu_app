@@ -11,10 +11,25 @@ function participantsOf(state: State, groupId: string) {
   return state.participants.filter((p) => p.group_id === groupId).sort((a, b) => a.sort - b.sort);
 }
 
+/** The current billing cycle (yyyy-mm). */
+export function currentCycle() {
+  return new Date().toLocaleDateString("en-CA").slice(0, 7);
+}
+
 /** A group's cost figures in bolivianos at the current rate. */
 function costOf(group: GroupRow, rate: number) {
   const totalBs = group.currency === "USD" ? group.amount * rate : group.amount;
-  return { totalBs, per: totalBs / Math.max(1, group.members_target), isUsd: group.currency === "USD" };
+  const n = Math.max(1, group.members_target);
+  // Once this month's charge ran, the cuota stays frozen at the rate captured
+  // on the billing day; until then it previews at today's rate.
+  const frozen = group.billed_cycle === currentCycle() && group.billed_cuota != null;
+  const per = frozen
+    ? (group.billed_cuota as number)
+    : group.round_cuota
+      ? Math.ceil(totalBs / n)
+      : totalBs / n;
+  // What the admin actually collects: with rounding/freezing it can differ from the plan cost.
+  return { totalBs, per, targetBs: per * n, isUsd: group.currency === "USD" };
 }
 
 /** Build the presentational view of a group row. */
@@ -61,9 +76,9 @@ export function buildGroup(state: State, group: GroupRow): GroupView {
     const collected = paid * k.per;
     view.admin = {
       collected: fmtBs(collected),
-      pending: fmtBs(k.totalBs - collected),
-      total: fmtBs(k.totalBs),
-      pct: pct(collected, k.totalBs),
+      pending: fmtBs(k.targetBs - collected),
+      total: fmtBs(k.targetBs),
+      pct: pct(collected, k.targetBs),
       pendingCount: String(group.members_target - paid),
     };
   }
@@ -218,7 +233,20 @@ export function getWallet(state: State) {
   };
 }
 
-/** Unified activity feed derived from group state. */
+/** Compact relative label for a notification timestamp. */
+function relTime(iso: string) {
+  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+  if (days <= 0) return "hoy";
+  if (days === 1) return "ayer";
+  return new Date(iso).toLocaleDateString("es", { day: "2-digit", month: "2-digit" });
+}
+
+/** Number of unread persisted notifications (bell badge). */
+export function getUnreadCount(state: State) {
+  return state.notifications.filter((n) => !n.read).length;
+}
+
+/** Unified activity feed: persisted notifications plus items derived from group state. */
 export function getActivity(state: State) {
   const groups = getGroups(state);
   const items: {
@@ -229,7 +257,24 @@ export function getActivity(state: State) {
     time: string;
     action: boolean;
     groupId: string;
+    unread?: boolean;
   }[] = [];
+
+  // Persisted notifications first (newest first, e.g. monthly charges).
+  const byId = new Map(groups.map((g) => [g.id, g]));
+  for (const n of state.notifications) {
+    const g = n.group_id ? byId.get(n.group_id) : undefined;
+    items.push({
+      mono: g?.mono ?? "!",
+      color: g?.color ?? colors.info,
+      title: n.title,
+      body: n.body,
+      time: relTime(n.created_at),
+      action: false,
+      groupId: n.group_id ?? "",
+      unread: !n.read,
+    });
+  }
 
   for (const g of groups) {
     if (g.owned) {
@@ -275,18 +320,42 @@ export function getEditView(state: State) {
   const rate = state.profile.exchange_rate;
   const amt = parseFloat(state.editAmount) || 0;
   const totalBs = state.editCur === "USD" ? amt * rate : amt;
-  const per = totalBs / Math.max(1, state.editMembers);
+  const n = Math.max(1, state.editMembers);
+  const per = state.editRound ? Math.ceil(totalBs / n) : totalBs / n;
+  const surplus = per * n - totalBs;
   return {
     meta,
     isUsd: state.editCur === "USD",
     perBs: fmtBs(per),
     totalBs: fmtBs(totalBs),
+    /** Extra collected per month when rounding is on ("" when negligible). */
+    roundNote: state.editRound && surplus >= 0.01 ? `Redondeo: se cobran ${fmtBs(surplus)} extra al mes` : "",
     rateLabel: `1 USD = ${fmtBs(rate)}`,
     usdLine:
       state.editCur === "USD"
         ? `Equivale a ${fmtUsd(amt)} total · ${fmtUsd(amt / Math.max(1, state.editMembers))} por persona`
         : "",
   };
+}
+
+/** Per-field validation errors for the cost editor (empty string = valid). */
+export function getEditErrors(state: State) {
+  const amt = parseFloat(state.editAmount);
+  const day = parseInt(state.editBillingDay, 10);
+  const roster = state.participants.filter((p) => p.group_id === state.editGroupId).length;
+  const amount =
+    !state.editAmount.trim() || !Number.isFinite(amt) || amt <= 0
+      ? "Ingresa un costo mayor a 0"
+      : amt > 100000
+        ? "El costo es demasiado alto"
+        : "";
+  const members =
+    state.editMembers < roster ? `La lista ya tiene ${roster} miembros · no puede ser menor` : "";
+  const billingDay =
+    !state.editBillingDay.trim() || !Number.isInteger(day) || day < 1 || day > 31
+      ? "Elige un día entre 1 y 31"
+      : "";
+  return { amount, members, billingDay, valid: !amount && !members && !billingDay };
 }
 
 /** Live-calculated fields for the Deposit screen. */

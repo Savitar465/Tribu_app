@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Avatar } from "@/components/ui/Avatar";
 import { BellIcon, ChartIcon, HomeIcon, PlusIcon, UserIcon, WalletIcon } from "@/components/ui/Icons";
-import { getProfileView } from "@/lib/selectors";
+import { getProfileView, getUnreadCount } from "@/lib/selectors";
 import { useApp } from "@/lib/store";
 import { ACCENT, GRADIENT, colors } from "@/lib/theme";
 import type { Screen } from "@/lib/types";
@@ -87,6 +87,7 @@ export function Sidebar() {
             key={item.screen}
             item={item}
             active={state.screen === item.screen}
+            badge={item.screen === "notifications" ? getUnreadCount(state) : 0}
             onClick={() => actions.go(item.screen)}
           />
         ))}
@@ -124,7 +125,17 @@ export function Sidebar() {
   );
 }
 
-function NavItem({ item, active, onClick }: { item: NavItemDef; active: boolean; onClick: () => void }) {
+function NavItem({
+  item,
+  active,
+  badge,
+  onClick,
+}: {
+  item: NavItemDef;
+  active: boolean;
+  badge: number;
+  onClick: () => void;
+}) {
   const [hover, setHover] = useState(false);
   const color = active ? ACCENT : hover ? colors.textPrimary : colors.textNav;
   return (
@@ -144,7 +155,25 @@ function NavItem({ item, active, onClick }: { item: NavItemDef; active: boolean;
       }}
     >
       {item.icon(color)}
-      <span style={{ fontSize: 14, fontWeight: 700 }}>{item.label}</span>
+      <span style={{ flex: 1, fontSize: 14, fontWeight: 700 }}>{item.label}</span>
+      {badge > 0 && (
+        <span
+          style={{
+            minWidth: 18,
+            height: 18,
+            borderRadius: 999,
+            background: colors.danger,
+            color: "#fff",
+            fontSize: 10.5,
+            fontWeight: 800,
+            display: "grid",
+            placeItems: "center",
+            padding: "0 5px",
+          }}
+        >
+          {badge > 9 ? "9+" : badge}
+        </span>
+      )}
     </div>
   );
 }

@@ -3,12 +3,12 @@ import type { Screen } from "@/lib/types";
 import { HomeScreen } from "./home/HomeScreen";
 import { DashboardScreen } from "./DashboardScreen";
 import { GroupScreen } from "./GroupScreen";
+import { AdminScreen } from "./AdminScreen";
 import { CreateScreen } from "./CreateScreen";
 import { PayScreen } from "./PayScreen";
 import { QrScreen } from "./QrScreen";
 import { ApproveScreen } from "./ApproveScreen";
 import { WalletScreen } from "./WalletScreen";
-import { EditScreen } from "./EditScreen";
 import { FxScreen } from "./FxScreen";
 import { DepositScreen } from "./DepositScreen";
 import { HistoryScreen } from "./HistoryScreen";
@@ -20,12 +20,12 @@ const SCREENS: Record<Screen, React.ComponentType> = {
   home: HomeScreen,
   dashboard: DashboardScreen,
   group: GroupScreen,
+  admin: AdminScreen,
   create: CreateScreen,
   pay: PayScreen,
   qr: QrScreen,
   approve: ApproveScreen,
   wallet: WalletScreen,
-  edit: EditScreen,
   fx: FxScreen,
   deposit: DepositScreen,
   history: HistoryScreen,

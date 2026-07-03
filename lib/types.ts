@@ -37,6 +37,7 @@ export type Screen =
   | "home"
   | "dashboard"
   | "group"
+  | "admin"
   | "create"
   | "pay"
   | "qr"
@@ -45,7 +46,6 @@ export type Screen =
   | "history"
   | "notifications"
   | "profile"
-  | "edit"
   | "fx"
   | "deposit";
 
