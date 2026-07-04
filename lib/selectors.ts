@@ -69,6 +69,9 @@ export function buildGroup(state: State, group: GroupRow): GroupView {
     isUsd: k.isUsd,
     perBs: k.per,
     totalBs: k.totalBs,
+    qrImageUrl: group.qr_image_url,
+    paypalInfo: group.paypal_info,
+    bankInfo: group.bank_info,
   };
 
   if (owned) {
@@ -144,19 +147,24 @@ export function getMembers(state: State, accent: string) {
     sub: m.email ?? "",
     av: m.is_self ? accent : m.color,
     paid: m.paid,
-    stLabel: m.paid ? "Pagado" : "Pendiente",
-    stColor: m.paid ? "#36d07a" : "#f5b53d",
-    stBg: m.paid ? "rgba(54,208,122,0.14)" : "rgba(245,181,61,0.14)",
+    stLabel: m.paid ? "Pagado" : m.proof_pending ? "En revisión" : "Pendiente",
+    stColor: m.paid ? "#36d07a" : m.proof_pending ? "#7ba6ff" : "#f5b53d",
+    stBg: m.paid ? "rgba(54,208,122,0.14)" : m.proof_pending ? "rgba(123,166,255,0.14)" : "rgba(245,181,61,0.14)",
   }));
 }
 
-/** The pending proof (if any) awaiting review in the current group. */
-export function getApproval(state: State) {
+/** All pending proofs awaiting review in the current group (submission order). */
+export function getApprovals(state: State) {
   const g = getCurrentGroup(state);
-  if (!g) return null;
-  const p = participantsOf(state, g.id).find((x) => x.proof_pending);
-  if (!p) return null;
-  return { id: p.id, name: p.name, groupName: g.name, cuota: g.cuota, plan: g.plan };
+  if (!g) return [];
+  return participantsOf(state, g.id)
+    .filter((x) => x.proof_pending)
+    .map((p) => ({ id: p.id, name: p.name, groupName: g.name, cuota: g.cuota, plan: g.plan, proofUrl: p.proof_url }));
+}
+
+/** The next pending proof (if any) awaiting review in the current group. */
+export function getApproval(state: State) {
+  return getApprovals(state)[0] ?? null;
 }
 
 /** Dashboard aggregates across all groups. */

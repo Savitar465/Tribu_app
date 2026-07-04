@@ -71,6 +71,12 @@ export interface GroupView {
   isUsd: boolean;
   perBs: number;
   totalBs: number;
+  /** Public URL of the admin's payment QR image (null when not uploaded). */
+  qrImageUrl: string | null;
+  /** PayPal email or paypal.me link for payments from abroad (null when unset). */
+  paypalInfo: string | null;
+  /** Free-text account details for transfers (e.g. UglyCash); null when unset. */
+  bankInfo: string | null;
   /** Admin-only collection figures (present when `owned`). */
   admin?: {
     collected: string;

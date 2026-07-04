@@ -6,7 +6,7 @@ import { MemberRow } from "@/components/ui/MemberRow";
 import { SectionLabel } from "@/components/ui/SectionLabel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { ScreenShell } from "@/components/screens/ScreenShell";
-import { getApproval, getCurrentGroup, getMembers, isPayable, statusStyle } from "@/lib/selectors";
+import { getApprovals, getCurrentGroup, getMembers, isPayable, statusStyle } from "@/lib/selectors";
 import { useApp } from "@/lib/store";
 import { ACCENT, colors } from "@/lib/theme";
 
@@ -15,7 +15,7 @@ export function GroupScreen() {
   const { state, actions } = useApp();
   const group = getCurrentGroup(state);
   const members = getMembers(state, ACCENT);
-  const approval = getApproval(state);
+  const approvals = getApprovals(state);
   const st = group ? statusStyle(group.statusKey) : null;
 
   if (!group || !st) return null;
@@ -75,7 +75,7 @@ export function GroupScreen() {
             <span style={{ flex: 1, fontSize: 14.5, fontWeight: 700, color: colors.textPrimary }}>
               Configuración de administrador
             </span>
-            {approval && (
+            {approvals.length > 0 && (
               <span
                 style={{
                   padding: "3px 9px",
@@ -86,7 +86,7 @@ export function GroupScreen() {
                   color: colors.info,
                 }}
               >
-                1 por revisar
+                {approvals.length} por revisar
               </span>
             )}
             <span style={{ fontSize: 14, fontWeight: 800, color: colors.textSecondary }}>›</span>
@@ -103,11 +103,8 @@ export function GroupScreen() {
         </Card>
 
         {isPayable(group) && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 22 }}>
+          <div style={{ marginBottom: 22 }}>
             <Button onClick={() => actions.go("pay")}>Pagar cuota</Button>
-            <Button variant="secondary" onClick={() => actions.go("qr")} style={{ padding: 15, fontSize: 14.5, fontWeight: 700 }}>
-              Pagar con QR
-            </Button>
           </div>
         )}
 

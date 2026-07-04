@@ -34,6 +34,12 @@ export interface GroupRow {
   billed_cycle: string | null;
   /** Per-member cuota (Bs) frozen at the rate captured on the billing day. */
   billed_cuota: number | null;
+  /** Public URL of the admin's payment QR image; null when not uploaded. */
+  qr_image_url: string | null;
+  /** PayPal email or paypal.me link for payments from abroad; null when unset. */
+  paypal_info: string | null;
+  /** Free-text account details (e.g. UglyCash / bank transfer); null when unset. */
+  bank_info: string | null;
   created_at: string;
 }
 
@@ -61,6 +67,8 @@ export interface ParticipantRow {
   email: string | null;
   /** Linked profile id when the email belongs to an existing app user. */
   user_id: string | null;
+  /** Public URL of the member's transfer receipt image; null when none uploaded. */
+  proof_url: string | null;
 }
 
 export interface GroupPaymentRow {

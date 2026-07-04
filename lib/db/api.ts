@@ -120,6 +120,77 @@ export async function updateGroupCost(
   if (error) throw new Error(`updateGroupCost: ${error.message}`);
 }
 
+/** Storage bucket holding per-group payment QR images (see 0014_group_qr.sql). */
+const QR_BUCKET = "payment-qr";
+
+/**
+ * Upload (or replace) a group's payment QR image and persist its public URL.
+ * The object lives at `<group_id>/qr`; Storage RLS restricts writes to the
+ * group admin. Returns the stored URL (cache-busted so a replaced image shows
+ * immediately).
+ */
+export async function uploadGroupQr(
+  supabase: SupabaseClient,
+  groupId: string,
+  file: File,
+): Promise<string> {
+  const path = `${groupId}/qr`;
+  const uploaded = await supabase.storage
+    .from(QR_BUCKET)
+    .upload(path, file, { upsert: true, contentType: file.type });
+  if (uploaded.error) throw new Error(`uploadGroupQr(storage): ${uploaded.error.message}`);
+
+  const { data } = supabase.storage.from(QR_BUCKET).getPublicUrl(path);
+  const url = `${data.publicUrl}?v=${Date.now()}`;
+  const updated = await supabase.from("groups").update({ qr_image_url: url }).eq("id", groupId);
+  if (updated.error) throw new Error(`uploadGroupQr(group): ${updated.error.message}`);
+  return url;
+}
+
+/** Storage bucket holding members' transfer receipts (see 0015_payment_methods.sql). */
+const PROOF_BUCKET = "payment-proofs";
+
+/**
+ * Upload (or replace) a member's transfer receipt for a group. The object
+ * lives at `<group_id>/<participant_id>`; Storage RLS restricts writes to
+ * that group's members. Returns the stored URL (cache-busted).
+ */
+export async function uploadPaymentProof(
+  supabase: SupabaseClient,
+  groupId: string,
+  participantId: string,
+  file: File,
+): Promise<string> {
+  const path = `${groupId}/${participantId}`;
+  const uploaded = await supabase.storage
+    .from(PROOF_BUCKET)
+    .upload(path, file, { upsert: true, contentType: file.type });
+  if (uploaded.error) throw new Error(`uploadPaymentProof: ${uploaded.error.message}`);
+  const { data } = supabase.storage.from(PROOF_BUCKET).getPublicUrl(path);
+  return `${data.publicUrl}?v=${Date.now()}`;
+}
+
+/** Save the admin's international payment methods (PayPal / bank transfer). */
+export async function updateGroupPayMethods(
+  supabase: SupabaseClient,
+  groupId: string,
+  values: { paypal: string | null; bank: string | null },
+): Promise<void> {
+  const { error } = await supabase
+    .from("groups")
+    .update({ paypal_info: values.paypal, bank_info: values.bank })
+    .eq("id", groupId);
+  if (error) throw new Error(`updateGroupPayMethods: ${error.message}`);
+}
+
+/** Delete a group's payment QR image and clear its URL. */
+export async function clearGroupQr(supabase: SupabaseClient, groupId: string): Promise<void> {
+  const removed = await supabase.storage.from(QR_BUCKET).remove([`${groupId}/qr`]);
+  if (removed.error) throw new Error(`clearGroupQr(storage): ${removed.error.message}`);
+  const updated = await supabase.from("groups").update({ qr_image_url: null }).eq("id", groupId);
+  if (updated.error) throw new Error(`clearGroupQr(group): ${updated.error.message}`);
+}
+
 /** Save the user's exchange rate. */
 export async function saveExchangeRate(
   supabase: SupabaseClient,
@@ -173,10 +244,14 @@ export async function setAutoFund(
 }
 
 /** Move the user's own roster row into "review" after submitting a proof. */
-export async function submitPayment(supabase: SupabaseClient, participantId: string): Promise<void> {
+export async function submitPayment(
+  supabase: SupabaseClient,
+  participantId: string,
+  proofUrl: string | null,
+): Promise<void> {
   const { error } = await supabase
     .from("group_participants")
-    .update({ proof_pending: true, paid: false })
+    .update({ proof_pending: true, paid: false, proof_url: proofUrl })
     .eq("id", participantId);
   if (error) throw new Error(`submitPayment: ${error.message}`);
 }

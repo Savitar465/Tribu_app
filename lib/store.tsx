@@ -139,10 +139,12 @@ type Action =
   | { type: "applyMoveMember"; a: { id: string; sort: number }; b: { id: string; sort: number } }
   | { type: "applyMemberPaid"; participantId: string; paid: boolean }
   | { type: "applyGroupCost"; groupId: string; amount: number; currency: Currency; members: number; billingDay: number; due: string; round: boolean; billedCuota: number | null }
+  | { type: "applyGroupQr"; groupId: string; url: string | null }
+  | { type: "applyGroupPayMethods"; groupId: string; paypal: string | null; bank: string | null }
   | { type: "applyDeposit"; balance: number; tx: WalletTxRow }
   | { type: "applyAutoFund"; value: boolean }
   | { type: "applyRate"; rate: number }
-  | { type: "applySubmitPay"; participantId: string }
+  | { type: "applySubmitPay"; participantId: string; proofUrl: string | null }
   | { type: "applyReview"; participantId: string; paid: boolean }
   | { type: "applyCreateGroup"; group: GroupRow; participants: ParticipantRow[] }
   | { type: "applyBilledCycle"; groupId: string; cycle: string; cuota: number }
@@ -289,6 +291,18 @@ function reducer(state: State, action: Action): State {
       );
       return flash({ ...state, groups }, "Costo mensual actualizado");
     }
+    case "applyGroupQr": {
+      const groups = state.groups.map((g) =>
+        g.id === action.groupId ? { ...g, qr_image_url: action.url } : g,
+      );
+      return flash({ ...state, groups }, action.url ? "QR de cobro actualizado" : "QR de cobro eliminado");
+    }
+    case "applyGroupPayMethods": {
+      const groups = state.groups.map((g) =>
+        g.id === action.groupId ? { ...g, paypal_info: action.paypal, bank_info: action.bank } : g,
+      );
+      return flash({ ...state, groups }, "Métodos de cobro actualizados");
+    }
     case "applyDeposit":
       return flash(
         { ...state, wallet: { ...state.wallet, balance: action.balance }, transactions: [action.tx, ...state.transactions], screen: "wallet" },
@@ -303,16 +317,23 @@ function reducer(state: State, action: Action): State {
       );
     case "applySubmitPay": {
       const participants = state.participants.map((p) =>
-        p.id === action.participantId ? { ...p, proof_pending: true, paid: false } : p,
+        p.id === action.participantId
+          ? { ...p, proof_pending: true, paid: false, proof_url: action.proofUrl }
+          : p,
       );
       return flash({ ...state, participants, screen: "group" }, "Comprobante enviado · pendiente de validación");
     }
     case "applyReview": {
+      const reviewed = state.participants.find((p) => p.id === action.participantId);
       const participants = state.participants.map((p) =>
         p.id === action.participantId ? { ...p, paid: action.paid, proof_pending: false } : p,
       );
+      // Stay on the approve screen while more proofs from this group are queued.
+      const more =
+        state.screen === "approve" &&
+        participants.some((p) => p.group_id === reviewed?.group_id && p.proof_pending);
       const msg = action.paid ? "Pago aprobado · saldo actualizado" : "Comprobante rechazado";
-      return flash({ ...state, participants, screen: "admin" }, msg);
+      return flash({ ...state, participants, screen: more ? "approve" : "admin" }, msg);
     }
     case "applyBilledCycle": {
       const groups = state.groups.map((g) =>
@@ -357,6 +378,14 @@ export interface Actions {
   setEditRound: (value: boolean) => void;
   /** Validate and persist the cost drafts. True on success. */
   saveEdit: () => Promise<boolean>;
+  /** Upload/replace the current group's payment QR image. True on success. */
+  setGroupQr: (file: File) => Promise<boolean>;
+  /** Delete the current group's payment QR image. */
+  removeGroupQr: () => void;
+  /** Save the current group's international payment methods. True on success. */
+  setGroupPayMethods: (paypal: string, bank: string) => Promise<boolean>;
+  /** Show a toast message (e.g. "copiado al portapapeles"). */
+  notify: (msg: string) => void;
   openFx: () => void;
   setRateDraft: (value: string) => void;
   presetRate: (value: number) => void;
@@ -368,7 +397,8 @@ export interface Actions {
   setDepCur: (cur: Currency) => void;
   doDeposit: () => void;
   toggleAutoFund: () => void;
-  submitPay: () => void;
+  /** Submit the cuota payment, optionally uploading a receipt image first. */
+  submitPay: (proof?: File | null) => void;
   reviewMember: (participantId: string, approve: boolean) => void;
   setCreate: (field: "name" | "amount" | "members" | "billingDay", value: string) => void;
   setCreateCur: (cur: Currency) => void;
@@ -410,6 +440,13 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
     const fail = (e: unknown) =>
       dispatch({ type: "flash", msg: e instanceof Error ? e.message : "Ocurrió un error" });
     const rate = () => ref.current.profile.exchange_rate;
+    // Shared guard for image uploads (QR / receipts): null when acceptable.
+    const imageError = (file: File) =>
+      !/^image\/(png|jpe?g|webp)$/.test(file.type)
+        ? "Solo imágenes JPG, PNG o WebP"
+        : file.size > 5 * 1024 * 1024
+          ? "La imagen supera los 5 MB"
+          : null;
     const currentGroup = () => ref.current.groups.find((g) => g.id === ref.current.agId) ?? ref.current.groups[0];
 
     // Fetch the official BCB "compra" rate for display and adopt it (always when
@@ -519,6 +556,51 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
         }
       },
 
+      setGroupQr: async (file) => {
+        const g = currentGroup();
+        if (!g) return false;
+        const err = imageError(file);
+        if (err) {
+          dispatch({ type: "flash", msg: err });
+          return false;
+        }
+        try {
+          const url = await api.uploadGroupQr(supabase, g.id, file);
+          dispatch({ type: "applyGroupQr", groupId: g.id, url });
+          return true;
+        } catch (e) {
+          fail(e);
+          return false;
+        }
+      },
+
+      removeGroupQr: async () => {
+        const g = currentGroup();
+        if (!g?.qr_image_url) return;
+        try {
+          await api.clearGroupQr(supabase, g.id);
+          dispatch({ type: "applyGroupQr", groupId: g.id, url: null });
+        } catch (e) {
+          fail(e);
+        }
+      },
+
+      setGroupPayMethods: async (paypal, bank) => {
+        const g = currentGroup();
+        if (!g) return false;
+        const values = { paypal: paypal.trim() || null, bank: bank.trim() || null };
+        try {
+          await api.updateGroupPayMethods(supabase, g.id, values);
+          dispatch({ type: "applyGroupPayMethods", groupId: g.id, ...values });
+          return true;
+        } catch (e) {
+          fail(e);
+          return false;
+        }
+      },
+
+      notify: (msg) => dispatch({ type: "flash", msg }),
+
       saveRate: async () => {
         const r = parseFloat(ref.current.rateDraft) || rate();
         try {
@@ -557,9 +639,16 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
         }
       },
 
-      submitPay: async () => {
+      submitPay: async (proof) => {
         const g = currentGroup();
         if (!g) return;
+        if (proof) {
+          const err = imageError(proof);
+          if (err) {
+            dispatch({ type: "flash", msg: err });
+            return;
+          }
+        }
         // Refresh the dollar price on every payment request so the cuota reflects
         // the current official rate.
         await syncOfficial(true);
@@ -569,8 +658,9 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
           return;
         }
         try {
-          await api.submitPayment(supabase, me.id);
-          dispatch({ type: "applySubmitPay", participantId: me.id });
+          const proofUrl = proof ? await api.uploadPaymentProof(supabase, g.id, me.id, proof) : null;
+          await api.submitPayment(supabase, me.id, proofUrl);
+          dispatch({ type: "applySubmitPay", participantId: me.id, proofUrl });
         } catch (e) {
           fail(e);
         }

@@ -10,7 +10,8 @@ import { SectionLabel } from "@/components/ui/SectionLabel";
 import { ScreenShell } from "@/components/screens/ScreenShell";
 import { AddMemberModal } from "@/components/screens/admin/AddMemberModal";
 import { CostEditor } from "@/components/screens/admin/CostEditor";
-import { getApproval, getCurrentGroup, getMembers } from "@/lib/selectors";
+import { PayMethodsEditor } from "@/components/screens/admin/PayMethodsEditor";
+import { getApprovals, getCurrentGroup, getMembers } from "@/lib/selectors";
 import { useApp } from "@/lib/store";
 import { ACCENT, colors } from "@/lib/theme";
 
@@ -20,7 +21,7 @@ export function AdminScreen() {
   const [addOpen, setAddOpen] = useState(false);
   const group = getCurrentGroup(state);
   const members = getMembers(state, ACCENT);
-  const approval = getApproval(state);
+  const approvals = getApprovals(state);
 
   if (!group?.owned) return null;
   const admin = group.admin;
@@ -65,7 +66,7 @@ export function AdminScreen() {
         </Card>
 
         {/* Approval alert */}
-        {approval && (
+        {approvals.length > 0 && (
           <div
             onClick={() => actions.go("approve")}
             style={{
@@ -84,9 +85,12 @@ export function AdminScreen() {
               <FileIcon />
             </IconBadge>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: colors.textPrimary }}>1 comprobante por revisar</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: colors.textPrimary }}>
+                {approvals.length === 1 ? "1 comprobante por revisar" : `${approvals.length} comprobantes por revisar`}
+              </div>
               <div style={{ fontSize: 12, color: colors.textMuted }}>
-                {approval.name} subió su pago de {group.cuota}
+                {approvals[0].name}
+                {approvals.length > 1 ? ` y ${approvals.length - 1} más subieron` : " subió"} su pago de {group.cuota}
               </div>
             </div>
             <ChevronRight color={colors.info} />
@@ -120,6 +124,9 @@ export function AdminScreen() {
 
         {/* Inline monthly-cost editor */}
         <CostEditor group={group} />
+
+        {/* How members pay their cuota: QR, PayPal, transferencia */}
+        <PayMethodsEditor group={group} />
 
         <Button variant="secondary" onClick={() => actions.go("history")} style={{ padding: 14, fontSize: 13.5, fontWeight: 700 }}>
           Ver historial de pagos

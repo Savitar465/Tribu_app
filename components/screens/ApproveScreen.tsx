@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { ImageIcon } from "@/components/ui/Icons";
 import { initials } from "@/components/ui/Avatar";
-import { getApproval } from "@/lib/selectors";
+import { getApproval, getApprovals } from "@/lib/selectors";
 import { useApp } from "@/lib/store";
 import { colors } from "@/lib/theme";
 
@@ -11,6 +11,7 @@ import { colors } from "@/lib/theme";
 export function ApproveScreen() {
   const { state, actions } = useApp();
   const approval = getApproval(state);
+  const queue = getApprovals(state).length;
 
   if (!approval) return null;
 
@@ -32,32 +33,65 @@ export function ApproveScreen() {
         >
           {initials(approval.name)}
         </div>
-        <div>
+        <div style={{ flex: 1 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: colors.textPrimary }}>{approval.name}</div>
           <div style={{ fontSize: 12.5, color: colors.textMuted }}>{approval.groupName} · cuota junio</div>
         </div>
+        {queue > 1 && (
+          <span
+            style={{
+              padding: "3px 9px",
+              borderRadius: 999,
+              fontSize: 11,
+              fontWeight: 700,
+              background: "rgba(123,166,255,0.18)",
+              color: colors.info,
+            }}
+          >
+            {queue - 1} más en cola
+          </span>
+        )}
       </div>
 
-      <div
-        style={{
-          borderRadius: 20,
-          overflow: "hidden",
-          border: `1px solid ${colors.border}`,
-          marginBottom: 16,
-          background: "repeating-linear-gradient(45deg, #14171e, #14171e 12px, #181c24 12px, #181c24 24px)",
-          height: 280,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 8,
-        }}
-      >
-        <ImageIcon />
-        <div style={{ fontSize: 12, color: colors.textFaint, fontFamily: "monospace" }}>
-          comprobante_transferencia.jpg
+      {approval.proofUrl ? (
+        <div
+          style={{
+            borderRadius: 20,
+            overflow: "hidden",
+            border: `1px solid ${colors.border}`,
+            marginBottom: 16,
+            background: "#0e1116",
+          }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={approval.proofUrl}
+            alt={`Comprobante de ${approval.name}`}
+            style={{ display: "block", width: "100%", maxHeight: 420, objectFit: "contain" }}
+          />
         </div>
-      </div>
+      ) : (
+        <div
+          style={{
+            borderRadius: 20,
+            overflow: "hidden",
+            border: `1px solid ${colors.border}`,
+            marginBottom: 16,
+            background: "repeating-linear-gradient(45deg, #14171e, #14171e 12px, #181c24 12px, #181c24 24px)",
+            height: 280,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+          }}
+        >
+          <ImageIcon />
+          <div style={{ fontSize: 12, color: colors.textFaint, fontFamily: "monospace" }}>
+            El miembro no adjuntó imagen
+          </div>
+        </div>
+      )}
 
       <Card padding="16px 18px" radius={16} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 22 }}>
         <div style={{ fontSize: 13.5, color: colors.textMuted, fontWeight: 600 }}>Monto declarado</div>
