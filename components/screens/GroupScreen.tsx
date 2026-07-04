@@ -6,7 +6,7 @@ import { MemberRow } from "@/components/ui/MemberRow";
 import { SectionLabel } from "@/components/ui/SectionLabel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { ScreenShell } from "@/components/screens/ScreenShell";
-import { getApprovals, getCurrentGroup, getMembers, isPayable, statusStyle } from "@/lib/selectors";
+import { getApprovals, getCurrentGroup, getMembers, getMyPrepaid, isPayable, statusStyle } from "@/lib/selectors";
 import { useApp } from "@/lib/store";
 import { ACCENT, colors } from "@/lib/theme";
 
@@ -16,6 +16,7 @@ export function GroupScreen() {
   const group = getCurrentGroup(state);
   const members = getMembers(state, ACCENT);
   const approvals = getApprovals(state);
+  const prepaid = group ? getMyPrepaid(state, group.id) : null;
   const st = group ? statusStyle(group.statusKey) : null;
 
   if (!group || !st) return null;
@@ -100,6 +101,39 @@ export function GroupScreen() {
           </div>
           <StatusBadge label={st.label} bg={st.bg} color={st.color} style={{ padding: "5px 14px", fontSize: 13 }} />
           <div style={{ fontSize: 12.5, color: colors.textMuted, marginTop: 12 }}>Vence el {group.due}/2026</div>
+          {prepaid && prepaid.pendingAmount != null && (
+            <div
+              style={{
+                display: "inline-block",
+                marginTop: 10,
+                padding: "5px 12px",
+                borderRadius: 999,
+                fontSize: 11.5,
+                fontWeight: 700,
+                background: "rgba(123,166,255,0.14)",
+                color: colors.info,
+              }}
+            >
+              Recarga de {prepaid.pendingMonths} meses en revisión
+            </div>
+          )}
+          {prepaid && prepaid.balance > 0 && (
+            <div
+              style={{
+                display: "inline-block",
+                marginTop: 10,
+                padding: "5px 12px",
+                borderRadius: 999,
+                fontSize: 11.5,
+                fontWeight: 700,
+                background: "rgba(54,208,122,0.14)",
+                color: colors.positive,
+              }}
+            >
+              Saldo adelantado: {prepaid.balanceLabel}
+              {group.perBs > 0 ? ` · cubre ~${Math.floor(prepaid.balance / group.perBs)} meses` : ""}
+            </div>
+          )}
         </Card>
 
         {isPayable(group) && (
@@ -107,6 +141,18 @@ export function GroupScreen() {
             <Button onClick={() => actions.go("pay")}>Pagar cuota</Button>
           </div>
         )}
+
+        {/* Prepay entry — hidden only while a proof/prepay is in review or the
+            member owes past months (arrears must be settled first). */}
+        {!group.owned &&
+          prepaid?.pendingAmount == null &&
+          (group.statusKey === "paid" || group.statusKey === "pending") && (
+            <div style={{ marginBottom: 22 }}>
+              <Button variant="secondary" onClick={() => actions.go("pay")} style={{ padding: 15, fontSize: 14.5, fontWeight: 700 }}>
+                Pagar por adelantado
+              </Button>
+            </div>
+          )}
 
         <SectionLabel>Miembros del grupo</SectionLabel>
         <Card padding="6px 14px">

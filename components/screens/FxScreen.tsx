@@ -87,9 +87,9 @@ export function FxScreen() {
           marginBottom: 22,
         }}
       >
-        Se usa para convertir los planes cobrados en dólares (como ChatGPT Team) a bolivianos, y para acreditar al
-        fondo común los depósitos hechos en USD. El tipo de cambio oficial se obtiene del Banco Central de Bolivia;
-        revisa el valor y pulsa Guardar para aplicarlo.
+        Se usa para convertir los planes cobrados en dólares (como ChatGPT Team) a bolivianos. Cuando la cuota
+        varía por el tipo de cambio, tu saldo adelantado compensa la diferencia mes a mes. El tipo de cambio
+        oficial se obtiene del Banco Central de Bolivia; revisa el valor y pulsa Guardar para aplicarlo.
       </div>
 
       <Button variant="primary" onClick={actions.saveRate}>

@@ -2,23 +2,42 @@ import { useRef, useState } from "react";
 import { ScreenShell } from "@/components/screens/ScreenShell";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
-import { CardIcon, ChevronRight, CreditCardIcon, GlobeIcon, QrIcon, UploadIcon } from "@/components/ui/Icons";
+import { ChevronRight, CreditCardIcon, GlobeIcon, QrIcon, UploadIcon } from "@/components/ui/Icons";
 import { IconBadge } from "@/components/ui/IconBadge";
 import { SectionLabel } from "@/components/ui/SectionLabel";
 import { fmtBs } from "@/lib/format";
-import { getCurrentGroup } from "@/lib/selectors";
+import { getCurrentGroup, getMyArrears, getMyPrepaid } from "@/lib/selectors";
 import { useApp } from "@/lib/store";
 import { colors } from "@/lib/theme";
 
-/** Pay: choose a payment method (QR, PayPal, transferencia, fondo) and upload the receipt. */
+/** Pay: pick how many months to cover (1 = this month, more = prepay), a method and the receipt. */
 export function PayScreen() {
   const { state, actions } = useApp();
   const group = getCurrentGroup(state);
+  const prepaid = group ? getMyPrepaid(state, group.id) : null;
   const inputRef = useRef<HTMLInputElement>(null);
   const [proof, setProof] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<"paypal" | "bank" | null>(null);
   const [sending, setSending] = useState(false);
+  const [months, setMonths] = useState(1);
+  const [payArrears, setPayArrears] = useState(false);
+
+  const arrears = group ? getMyArrears(state, group.id) : null;
+  const settleAll = payArrears && arrears !== null && arrears.count > 0;
+  // With debt, a simple payment goes to the oldest owed month (at that
+  // month's price) and prepaying is disabled until the member is current.
+  const oldest = !settleAll && arrears && arrears.hasPast ? arrears.items[0] : null;
+  // Current month already paid → any submission is a prepay of coming months.
+  const currentPaid = !oldest && arrears !== null && arrears.count === 0 && group?.statusKey === "paid";
+  const isPrepay = !settleAll && !oldest && (months > 1 || currentPaid);
+  const total = settleAll
+    ? arrears.totalLabel
+    : oldest
+      ? oldest.cuotaLabel
+      : group
+        ? fmtBs(Math.round(group.perBs * months * 100) / 100)
+        : "—";
 
   const pick = (file: File | null) => {
     if (!file) return;
@@ -38,7 +57,9 @@ export function PayScreen() {
 
   const send = async () => {
     setSending(true);
-    await actions.submitPay(proof);
+    if (settleAll) await actions.submitPay(proof, arrears.cycles);
+    else if (isPrepay) await actions.submitPrepay(months, proof);
+    else await actions.submitPay(proof);
     setSending(false);
   };
 
@@ -50,13 +71,126 @@ export function PayScreen() {
 
   return (
     <ScreenShell>
-      <Card padding={22} radius={22} style={{ textAlign: "center", marginBottom: 22 }}>
+      <Card padding={22} radius={22} style={{ textAlign: "center", marginBottom: 12 }}>
         <div style={{ fontSize: 13, color: colors.textMuted, fontWeight: 600 }}>Monto a pagar</div>
         <div style={{ fontSize: 44, fontWeight: 800, letterSpacing: -1.5, color: colors.textPrimary, margin: "4px 0" }}>
-          {group?.cuota ?? "—"}
+          {total}
         </div>
-        <div style={{ fontSize: 13, color: colors.textMuted }}>{group?.name} · cuota de junio 2026</div>
+        <div style={{ fontSize: 13, color: colors.textMuted }}>
+          {group?.name} ·{" "}
+          {settleAll
+            ? `${arrears.count} ${arrears.count === 1 ? "mes pendiente" : "meses pendientes"}`
+            : oldest
+              ? `cuota de ${oldest.label} (mes más antiguo)`
+              : isPrepay
+                ? `${months} ${months === 1 ? "mes" : "meses"} por adelantado`
+                : "cuota del mes"}
+        </div>
       </Card>
+
+      {/* Owed months (each at the price charged that month) */}
+      {arrears && arrears.hasPast && (
+        <Card
+          padding="13px 16px"
+          radius={16}
+          style={{ marginBottom: 12, border: "1px solid rgba(245,181,61,0.3)" }}
+        >
+          <div style={{ fontSize: 13.5, fontWeight: 700, color: colors.warning, marginBottom: 8 }}>
+            Tienes cuotas atrasadas
+          </div>
+          {arrears.items.map((it) => (
+            <div
+              key={it.cycle}
+              style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 12.5 }}
+            >
+              <span style={{ color: colors.textMuted, fontWeight: 600 }}>
+                {it.label}
+                {it.isCurrent ? " (mes actual)" : ""}
+              </span>
+              <span style={{ color: colors.textPrimary, fontWeight: 700 }}>{it.cuotaLabel}</span>
+            </div>
+          ))}
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              paddingTop: 8,
+              marginTop: 4,
+              borderTop: `1px solid ${colors.hairlineSoft}`,
+              fontSize: 13.5,
+              fontWeight: 800,
+            }}
+          >
+            <span style={{ color: colors.textSecondary }}>Total para ponerte al día</span>
+            <span style={{ color: colors.warning }}>{arrears.totalLabel}</span>
+          </div>
+          <Button
+            variant={settleAll ? "secondary" : "primary"}
+            onClick={() => setPayArrears(!payArrears)}
+            style={{ padding: 12, fontSize: 13.5, marginTop: 12 }}
+          >
+            {settleAll ? "Cancelar · pagar un solo mes" : `Pagar todo · ${arrears.totalLabel}`}
+          </Button>
+          {!settleAll && (
+            <div style={{ fontSize: 11.5, color: colors.textMuted, marginTop: 8 }}>
+              Si pagas un solo mes, se aplica al más antiguo ({arrears.items[0].label}).
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* Months to cover (1 = this month, more = prepay) — hidden while owing */}
+      {!settleAll && !oldest && (
+      <Card padding="12px 14px" radius={16} style={{ marginBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: colors.textPrimary }}>
+              {currentPaid ? "Meses siguientes" : "Meses a pagar"}
+            </div>
+            <div style={{ fontSize: 11.5, color: colors.textMuted, marginTop: 1 }}>
+              {currentPaid
+                ? "Tu cuota del mes ya está pagada · esto se acredita a tu saldo"
+                : isPrepay
+                  ? "Pago adelantado · lo aprueba el admin una sola vez"
+                  : "Solo el mes actual"}
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <MonthBtn label="−" onClick={() => setMonths((m) => Math.max(1, m - 1))} />
+            <div style={{ minWidth: 26, textAlign: "center", fontSize: 18, fontWeight: 800, color: colors.textPrimary }}>
+              {months}
+            </div>
+            <MonthBtn label="+" onClick={() => setMonths((m) => Math.min(12, m + 1))} />
+          </div>
+        </div>
+        {isPrepay && (
+          <div style={{ fontSize: 11.5, color: colors.textMuted, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${colors.hairlineSoft}` }}>
+            Si la cuota varía por el tipo de cambio, tu saldo compensa la diferencia: lo que sobra de
+            un mes pasa al siguiente y las cuotas se descuentan automáticamente (sin aprobar
+            comprobantes cada mes) hasta agotar el saldo.
+          </div>
+        )}
+      </Card>
+      )}
+
+      {/* Prepaid status */}
+      {prepaid && prepaid.pendingAmount != null && (
+        <Card padding="13px 16px" radius={16} style={{ marginBottom: 12, border: "1px solid rgba(123,166,255,0.3)" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: colors.info }}>
+            Tienes una recarga de {prepaid.pendingMonths} meses en revisión ({fmtBs(prepaid.pendingAmount)})
+          </div>
+        </Card>
+      )}
+      {prepaid && prepaid.balance > 0 && (
+        <Card padding="13px 16px" radius={16} style={{ marginBottom: 12, border: "1px solid rgba(54,208,122,0.25)" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: colors.positive }}>
+            Saldo adelantado en este grupo: {prepaid.balanceLabel}
+          </div>
+          <div style={{ fontSize: 11.5, color: colors.textMuted, marginTop: 2 }}>
+            Tu cuota se descuenta de este saldo cada mes automáticamente.
+          </div>
+        </Card>
+      )}
 
       <SectionLabel>Método de pago</SectionLabel>
       <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 22 }}>
@@ -131,17 +265,6 @@ export function PayScreen() {
           </Card>
         )}
 
-        <Card padding={15} radius={16} style={{ cursor: "pointer" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 13 }}>
-            <IconBadge background="rgba(54,208,122,0.15)">
-              <CardIcon />
-            </IconBadge>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: colors.textPrimary }}>Fondo común</div>
-              <div style={{ fontSize: 12, color: colors.textMuted }}>Disponible {fmtBs(state.wallet.balance)}</div>
-            </div>
-          </div>
-        </Card>
       </div>
 
       <SectionLabel>Comprobante</SectionLabel>
@@ -196,9 +319,43 @@ export function PayScreen() {
         )}
       </div>
 
-      <Button onClick={send} disabled={sending}>
-        {sending ? "Enviando…" : "Enviar comprobante"}
+      <Button onClick={send} disabled={sending || (isPrepay && !proof)}>
+        {sending
+          ? "Enviando…"
+          : settleAll
+            ? `Enviar pago completo · ${total}`
+            : isPrepay
+              ? `Enviar pago adelantado · ${total}`
+              : "Enviar comprobante"}
       </Button>
+      {isPrepay && !proof && (
+        <div style={{ fontSize: 11.5, color: colors.textMuted, marginTop: 8, textAlign: "center" }}>
+          El pago adelantado requiere adjuntar el comprobante.
+        </div>
+      )}
     </ScreenShell>
+  );
+}
+
+/** A small round +/− button for the months stepper. */
+function MonthBtn({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        width: 32,
+        height: 32,
+        borderRadius: 10,
+        background: colors.surface3,
+        display: "grid",
+        placeItems: "center",
+        color: colors.textPrimary,
+        fontSize: 18,
+        fontWeight: 700,
+        cursor: "pointer",
+      }}
+    >
+      {label}
+    </div>
   );
 }

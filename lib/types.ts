@@ -42,12 +42,12 @@ export type Screen =
   | "pay"
   | "qr"
   | "approve"
+  | "arrears"
   | "wallet"
   | "history"
   | "notifications"
   | "profile"
-  | "fx"
-  | "deposit";
+  | "fx";
 
 /** A group as presented in list/detail views. */
 export interface GroupView {

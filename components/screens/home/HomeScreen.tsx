@@ -66,7 +66,7 @@ export function HomeScreen() {
             </div>
           </div>
 
-          {/* Shared-fund shortcut */}
+          {/* Prepaid-balance shortcut */}
           <div
             onClick={() => actions.go("wallet")}
             style={{
@@ -86,11 +86,11 @@ export function HomeScreen() {
                 <CardIcon />
               </IconBadge>
               <div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: colors.textPrimary }}>Fondo común</div>
-                <div style={{ fontSize: 12, color: colors.textMuted }}>Disponible</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: colors.textPrimary }}>Saldo adelantado</div>
+                <div style={{ fontSize: 12, color: colors.textMuted }}>En tus grupos</div>
               </div>
             </div>
-            <div style={{ fontSize: 18, fontWeight: 800, color: colors.textPrimary }}>{h.walletBalance}</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: colors.textPrimary }}>{h.prepaidTotal}</div>
           </div>
 
           <SectionLabel>Tus grupos</SectionLabel>

@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Currency, ServiceId } from "@/lib/types";
 import type {
   AppData,
+  ChargeRow,
   GroupPaymentRow,
   GroupRow,
   NotificationRow,
@@ -25,11 +26,12 @@ function must<T>(data: T | null, error: { message: string } | null, what: string
 
 /** Fetch the full app dataset for a user in parallel. */
 export async function fetchAppData(supabase: SupabaseClient, userId: string): Promise<AppData> {
-  const [profile, groups, participants, payments, wallet, transactions, notifications] = await Promise.all([
+  const [profile, groups, participants, payments, charges, wallet, transactions, notifications] = await Promise.all([
     supabase.from("profiles").select("*").eq("id", userId).single(),
     supabase.from("groups").select("*").order("created_at", { ascending: true }),
     supabase.from("group_participants").select("*").order("sort", { ascending: true }),
     supabase.from("group_payments").select("*").order("sort", { ascending: true }),
+    supabase.from("participant_charges").select("*").order("cycle", { ascending: true }),
     supabase.from("wallets").select("*").eq("user_id", userId).single(),
     supabase.from("wallet_transactions").select("*").order("created_at", { ascending: false }),
     supabase.from("notifications").select("*").order("created_at", { ascending: false }).limit(50),
@@ -40,10 +42,48 @@ export async function fetchAppData(supabase: SupabaseClient, userId: string): Pr
     groups: must<GroupRow[]>(groups.data, groups.error, "groups"),
     participants: must<ParticipantRow[]>(participants.data, participants.error, "participants"),
     payments: must<GroupPaymentRow[]>(payments.data, payments.error, "payments"),
+    charges: must<ChargeRow[]>(charges.data, charges.error, "charges"),
     wallet: must<WalletRow>(wallet.data, wallet.error, "wallet"),
     transactions: must<WalletTxRow[]>(transactions.data, transactions.error, "transactions"),
     notifications: must<NotificationRow[]>(notifications.data, notifications.error, "notifications"),
   };
+}
+
+/** All charge rows visible to the user (refreshed after a billing run). */
+export async function fetchCharges(supabase: SupabaseClient): Promise<ChargeRow[]> {
+  const { data, error } = await supabase
+    .from("participant_charges")
+    .select("*")
+    .order("cycle", { ascending: true });
+  return must<ChargeRow[]>(data, error, "fetchCharges");
+}
+
+/** Insert this cycle's charge rows (existing (participant, cycle) rows are kept). */
+export async function insertCharges(
+  supabase: SupabaseClient,
+  rows: { group_id: string; participant_id: string; cycle: string; cuota: number; paid: boolean; paid_at: string | null }[],
+): Promise<void> {
+  if (rows.length === 0) return;
+  const { error } = await supabase
+    .from("participant_charges")
+    .upsert(rows, { onConflict: "participant_id,cycle", ignoreDuplicates: true });
+  if (error) throw new Error(`insertCharges: ${error.message}`);
+}
+
+/** Mark a participant's charges for the given cycles as paid/unpaid. */
+export async function setChargesPaid(
+  supabase: SupabaseClient,
+  participantId: string,
+  cycles: string[],
+  paid: boolean,
+): Promise<void> {
+  if (cycles.length === 0) return;
+  const { error } = await supabase
+    .from("participant_charges")
+    .update({ paid, paid_at: paid ? new Date().toISOString() : null })
+    .eq("participant_id", participantId)
+    .in("cycle", cycles);
+  if (error) throw new Error(`setChargesPaid: ${error.message}`);
 }
 
 /** The signed-in user's notification feed (newest first). */
@@ -215,45 +255,57 @@ export async function saveOfficialRate(
   if (error) throw new Error(`saveOfficialRate: ${error.message}`);
 }
 
-/** Record a deposit: set the new balance and append a movement. */
-export async function deposit(
-  supabase: SupabaseClient,
-  userId: string,
-  newBalance: number,
-  tx: { label: string; sub: string; amount: number },
-): Promise<WalletTxRow> {
-  const walletUpdate = await supabase.from("wallets").update({ balance: newBalance }).eq("user_id", userId);
-  if (walletUpdate.error) throw new Error(`deposit(wallet): ${walletUpdate.error.message}`);
-
-  const inserted = await supabase
-    .from("wallet_transactions")
-    .insert({ user_id: userId, label: tx.label, sub: tx.sub, amount: tx.amount })
-    .select("*")
-    .single();
-  return must<WalletTxRow>(inserted.data, inserted.error, "deposit(tx)");
-}
-
-/** Toggle the wallet's auto-pay setting. */
-export async function setAutoFund(
-  supabase: SupabaseClient,
-  userId: string,
-  value: boolean,
-): Promise<void> {
-  const { error } = await supabase.from("wallets").update({ auto_fund: value }).eq("user_id", userId);
-  if (error) throw new Error(`setAutoFund: ${error.message}`);
-}
-
-/** Move the user's own roster row into "review" after submitting a proof. */
+/** Move the user's own roster row into "review" after submitting a proof.
+ * `cycles` records which months the receipt pays (current month, or all
+ * owed). `paid` is untouched — only the admin flips it on approval (the
+ * member-update guard forbids members changing it). */
 export async function submitPayment(
   supabase: SupabaseClient,
   participantId: string,
   proofUrl: string | null,
+  cycles: string[],
 ): Promise<void> {
   const { error } = await supabase
     .from("group_participants")
-    .update({ proof_pending: true, paid: false, proof_url: proofUrl })
+    .update({ proof_pending: true, proof_url: proofUrl, pay_cycles: cycles })
     .eq("id", participantId);
   if (error) throw new Error(`submitPayment: ${error.message}`);
+}
+
+/** Submit a prepay (N months in advance) for admin approval. */
+export async function submitPrepay(
+  supabase: SupabaseClient,
+  participantId: string,
+  values: { amount: number; months: number; proofUrl: string },
+): Promise<void> {
+  const { error } = await supabase
+    .from("group_participants")
+    .update({
+      prepay_pending: values.amount,
+      prepay_months: values.months,
+      proof_url: values.proofUrl,
+      proof_pending: true,
+    })
+    .eq("id", participantId);
+  if (error) throw new Error(`submitPrepay: ${error.message}`);
+}
+
+/** Patch a participant's billing state (prepaid balance, paid flags, cycle stamp). */
+export async function updateParticipantBilling(
+  supabase: SupabaseClient,
+  participantId: string,
+  patch: {
+    prepaid_balance?: number;
+    paid?: boolean;
+    proof_pending?: boolean;
+    prepay_pending?: number | null;
+    prepay_months?: number | null;
+    billed_cycle?: string;
+    pay_cycles?: string[] | null;
+  },
+): Promise<void> {
+  const { error } = await supabase.from("group_participants").update(patch).eq("id", participantId);
+  if (error) throw new Error(`updateParticipantBilling: ${error.message}`);
 }
 
 /** Approve or reject a participant's proof. */

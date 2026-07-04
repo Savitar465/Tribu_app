@@ -11,7 +11,7 @@ import { ScreenShell } from "@/components/screens/ScreenShell";
 import { AddMemberModal } from "@/components/screens/admin/AddMemberModal";
 import { CostEditor } from "@/components/screens/admin/CostEditor";
 import { PayMethodsEditor } from "@/components/screens/admin/PayMethodsEditor";
-import { getApprovals, getCurrentGroup, getMembers } from "@/lib/selectors";
+import { getApprovals, getCurrentGroup, getGroupArrears, getMembers } from "@/lib/selectors";
 import { useApp } from "@/lib/store";
 import { ACCENT, colors } from "@/lib/theme";
 
@@ -22,6 +22,7 @@ export function AdminScreen() {
   const group = getCurrentGroup(state);
   const members = getMembers(state, ACCENT);
   const approvals = getApprovals(state);
+  const arrears = getGroupArrears(state);
 
   if (!group?.owned) return null;
   const admin = group.admin;
@@ -94,6 +95,32 @@ export function AdminScreen() {
               </div>
             </div>
             <ChevronRight color={colors.info} />
+          </div>
+        )}
+
+        {/* Unpaid charges → dedicated page */}
+        {arrears.count > 0 && (
+          <div
+            onClick={() => actions.go("arrears")}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              background: "rgba(245,181,61,0.08)",
+              border: "1px solid rgba(245,181,61,0.3)",
+              borderRadius: 16,
+              padding: 14,
+              marginBottom: 14,
+              cursor: "pointer",
+            }}
+          >
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: colors.textPrimary }}>Cuotas por cobrar</div>
+              <div style={{ fontSize: 12, color: colors.textMuted }}>
+                {arrears.count} {arrears.count === 1 ? "cuota pendiente" : "cuotas pendientes"} · {arrears.totalLabel}
+              </div>
+            </div>
+            <ChevronRight color={colors.warning} />
           </div>
         )}
 

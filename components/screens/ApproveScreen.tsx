@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { ImageIcon } from "@/components/ui/Icons";
 import { initials } from "@/components/ui/Avatar";
+import { fmtBs } from "@/lib/format";
 import { getApproval, getApprovals } from "@/lib/selectors";
 import { useApp } from "@/lib/store";
 import { colors } from "@/lib/theme";
@@ -35,7 +36,10 @@ export function ApproveScreen() {
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: colors.textPrimary }}>{approval.name}</div>
-          <div style={{ fontSize: 12.5, color: colors.textMuted }}>{approval.groupName} · cuota junio</div>
+          <div style={{ fontSize: 12.5, color: colors.textMuted }}>
+            {approval.groupName} ·{" "}
+            {approval.prepayAmount != null ? `pago adelantado · ${approval.prepayMonths} meses` : "cuota junio"}
+          </div>
         </div>
         {queue > 1 && (
           <span
@@ -93,9 +97,19 @@ export function ApproveScreen() {
         </div>
       )}
 
-      <Card padding="16px 18px" radius={16} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 22 }}>
-        <div style={{ fontSize: 13.5, color: colors.textMuted, fontWeight: 600 }}>Monto declarado</div>
-        <div style={{ fontSize: 20, fontWeight: 800, color: colors.textPrimary }}>{approval.cuota}</div>
+      <Card padding="16px 18px" radius={16} style={{ marginBottom: 22 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ fontSize: 13.5, color: colors.textMuted, fontWeight: 600 }}>Monto declarado</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: colors.textPrimary }}>
+            {approval.prepayAmount != null ? fmtBs(approval.prepayAmount) : approval.cuota}
+          </div>
+        </div>
+        {approval.prepayAmount != null && (
+          <div style={{ fontSize: 11.5, color: colors.textMuted, marginTop: 8 }}>
+            Al aprobar se acredita a su saldo adelantado: la cuota de cada mes se descontará
+            automáticamente, sin aprobar más comprobantes.
+          </div>
+        )}
       </Card>
 
       <div style={{ display: "flex", gap: 10 }}>

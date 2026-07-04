@@ -15,7 +15,7 @@ interface NavItemDef {
 const ITEMS: NavItemDef[] = [
   { screen: "home", label: "Inicio", icon: (c) => <HomeIcon size={20} color={c} /> },
   { screen: "dashboard", label: "Resumen", icon: (c) => <ChartIcon size={20} color={c} /> },
-  { screen: "wallet", label: "Wallet", icon: (c) => <WalletIcon size={20} color={c} /> },
+  { screen: "wallet", label: "Saldo", icon: (c) => <WalletIcon size={20} color={c} /> },
   { screen: "notifications", label: "Actividad", icon: (c) => <BellIcon size={20} color={c} /> },
   { screen: "profile", label: "Perfil", icon: (c) => <UserIcon size={20} color={c} /> },
 ];

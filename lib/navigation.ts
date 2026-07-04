@@ -15,8 +15,8 @@ export const BACK_MAP: Partial<Record<Screen, Screen>> = {
   pay: "group",
   qr: "group",
   approve: "admin",
+  arrears: "admin",
   fx: "wallet",
-  deposit: "wallet",
 };
 
 /** Static back-bar titles (the `group` screen title is the group name, resolved elsewhere). */
@@ -26,7 +26,7 @@ export const BACK_TITLE: Partial<Record<Screen, string>> = {
   pay: "Pagar cuota",
   qr: "Pago con QR",
   approve: "Revisar comprobante",
+  arrears: "Cuotas por cobrar",
   history: "Historial",
   fx: "Tipo de cambio",
-  deposit: "Depositar al fondo",
 };

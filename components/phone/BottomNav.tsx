@@ -14,7 +14,7 @@ interface Tab {
 const TABS: Tab[] = [
   { screen: "home", label: "Inicio", icon: (c) => <HomeIcon color={c} /> },
   { screen: "dashboard", label: "Resumen", icon: (c) => <ChartIcon color={c} /> },
-  { screen: "wallet", label: "Wallet", icon: (c) => <WalletIcon size={22} color={c} /> },
+  { screen: "wallet", label: "Saldo", icon: (c) => <WalletIcon size={22} color={c} /> },
   { screen: "notifications", label: "Actividad", icon: (c) => <BellIcon size={22} color={c} /> },
   { screen: "profile", label: "Perfil", icon: (c) => <UserIcon color={c} /> },
 ];

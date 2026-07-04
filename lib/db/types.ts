@@ -69,6 +69,30 @@ export interface ParticipantRow {
   user_id: string | null;
   /** Public URL of the member's transfer receipt image; null when none uploaded. */
   proof_url: string | null;
+  /** Prepaid balance (Bs) the monthly cuota is deducted from. */
+  prepaid_balance: number;
+  /** Submitted prepay amount (Bs) awaiting admin approval; null when none. */
+  prepay_pending: number | null;
+  /** Months declared for the pending prepay; null when none. */
+  prepay_months: number | null;
+  /** Last billing cycle (yyyy-mm) processed for this participant; null if never. */
+  billed_cycle: string | null;
+  /** Cycles (yyyy-mm) a submitted receipt is paying; null when none pending. */
+  pay_cycles: string[] | null;
+}
+
+/** One month's charge for one participant (cuota frozen at that month's rate). */
+export interface ChargeRow {
+  id: string;
+  group_id: string;
+  participant_id: string;
+  cycle: string;
+  cuota: number;
+  paid: boolean;
+  paid_at: string | null;
+  /** Last automatic reminder tier sent (0 none, 1 at 3 days, 2 at 7 days). */
+  reminder_level: number;
+  created_at: string;
 }
 
 export interface GroupPaymentRow {
@@ -100,6 +124,7 @@ export interface AppData {
   groups: GroupRow[];
   participants: ParticipantRow[];
   payments: GroupPaymentRow[];
+  charges: ChargeRow[];
   wallet: WalletRow;
   transactions: WalletTxRow[];
   notifications: NotificationRow[];

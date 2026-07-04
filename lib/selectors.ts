@@ -16,6 +16,16 @@ export function currentCycle() {
   return new Date().toLocaleDateString("en-CA").slice(0, 7);
 }
 
+/** Human label for a cycle, e.g. "junio 2026". */
+export function cycleLabel(cycle: string) {
+  return new Date(`${cycle}-02T12:00:00`).toLocaleDateString("es", { month: "long", year: "numeric" });
+}
+
+/** Short label for a cycle, e.g. "jun". */
+export function cycleShort(cycle: string) {
+  return new Date(`${cycle}-02T12:00:00`).toLocaleDateString("es", { month: "short" });
+}
+
 /** A group's cost figures in bolivianos at the current rate. */
 function costOf(group: GroupRow, rate: number) {
   const totalBs = group.currency === "USD" ? group.amount * rate : group.amount;
@@ -39,13 +49,19 @@ export function buildGroup(state: State, group: GroupRow): GroupView {
   const k = costOf(group, rate);
   const owned = group.owner_id === state.profile.id;
   // The viewer's own roster row (owner or member) drives their cuota status.
+  // Any unpaid charge from a past cycle marks the whole group overdue.
   const myRow = state.participants.find((p) => p.group_id === group.id && p.user_id === state.profile.id);
+  const hasArrears = myRow
+    ? state.charges.some((c) => c.participant_id === myRow.id && !c.paid && c.cycle < currentCycle())
+    : false;
   const statusKey: StatusKey = myRow
     ? myRow.proof_pending
       ? "review"
-      : myRow.paid
-        ? "paid"
-        : "pending"
+      : hasArrears
+        ? "overdue"
+        : myRow.paid
+          ? "paid"
+          : "pending"
     : group.self_status;
   // Custom ("others") groups carry their own color and derive a monogram from the name.
   const color = group.color ?? meta.color;
@@ -132,7 +148,11 @@ export function getHome(state: State) {
     hasGroups: groups.length > 0,
     payDue: fmtBs(due),
     dueCount: groups.filter((g) => g.statusKey === "pending" || g.statusKey === "overdue").length,
-    walletBalance: fmtBs(state.wallet.balance),
+    prepaidTotal: fmtBs(
+      state.participants
+        .filter((p) => p.user_id === state.profile.id)
+        .reduce((a, p) => a + p.prepaid_balance, 0),
+    ),
   };
 }
 
@@ -144,7 +164,9 @@ export function getMembers(state: State, accent: string) {
     id: m.id,
     isSelf: m.is_self,
     name: m.name,
-    sub: m.email ?? "",
+    sub: [m.email, m.prepaid_balance > 0 ? `Saldo: ${fmtBs(m.prepaid_balance)}` : ""]
+      .filter(Boolean)
+      .join(" · "),
     av: m.is_self ? accent : m.color,
     paid: m.paid,
     stLabel: m.paid ? "Pagado" : m.proof_pending ? "En revisión" : "Pendiente",
@@ -159,7 +181,17 @@ export function getApprovals(state: State) {
   if (!g) return [];
   return participantsOf(state, g.id)
     .filter((x) => x.proof_pending)
-    .map((p) => ({ id: p.id, name: p.name, groupName: g.name, cuota: g.cuota, plan: g.plan, proofUrl: p.proof_url }));
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      groupName: g.name,
+      cuota: g.cuota,
+      plan: g.plan,
+      proofUrl: p.proof_url,
+      /** Set when the submission is a prepay (amount in Bs + months declared). */
+      prepayAmount: p.prepay_pending,
+      prepayMonths: p.prepay_months,
+    }));
 }
 
 /** The next pending proof (if any) awaiting review in the current group. */
@@ -205,39 +237,144 @@ export function getDashboard(state: State) {
   };
 }
 
-/** Wallet screen figures. */
-export function getWallet(state: State) {
-  const rate = state.profile.exchange_rate;
-  // Scheduled charges and the monthly commitment are derived from the user's
-  // real groups (per-member cuota + billing due), not a hardcoded catalog.
-  const views = state.groups.map((g) => buildGroup(state, g));
-  const monthlyCommit = views.reduce((a, g) => a + g.perBs, 0);
-  const scheduled = views.map((g) => ({
-    id: g.id,
-    label: g.name,
-    date: g.due,
-    color: g.color,
-    mono: g.mono,
-    amount: g.cuota,
-  }));
+/** The signed-in user's unpaid charges in a group (arrears + current month). */
+export function getMyArrears(state: State, groupId: string) {
+  const me = state.participants.find((p) => p.group_id === groupId && p.user_id === state.profile.id);
+  const cur = currentCycle();
+  const items = me
+    ? state.charges
+        .filter((c) => c.participant_id === me.id && !c.paid)
+        .sort((a, b) => a.cycle.localeCompare(b.cycle))
+        .map((c) => ({
+          cycle: c.cycle,
+          label: cycleLabel(c.cycle),
+          cuota: c.cuota,
+          cuotaLabel: fmtBs(c.cuota),
+          isCurrent: c.cycle === cur,
+        }))
+    : [];
+  const total = items.reduce((a, i) => a + i.cuota, 0);
+  return {
+    items,
+    cycles: items.map((i) => i.cycle),
+    count: items.length,
+    /** True when something older than the current month is owed. */
+    hasPast: items.some((i) => !i.isCurrent),
+    total,
+    totalLabel: fmtBs(total),
+  };
+}
 
-  const transactions = state.transactions.map((t) => ({
-    id: t.id,
-    label: t.label,
-    sub: t.sub ?? "",
-    amount: `${t.amount >= 0 ? "+" : "−"}${fmtBs(Math.abs(t.amount))}`,
-    color: t.amount >= 0 ? colors.positive : colors.textMuted,
-  }));
+/** Admin view of the current group's unpaid charges: by month and by member. */
+export function getGroupArrears(state: State) {
+  const g = getCurrentGroup(state);
+  const empty = { byMonth: [], byMember: [], count: 0, totalLabel: fmtBs(0) };
+  if (!g) return empty;
+  const roster = new Map(participantsOf(state, g.id).map((p) => [p.id, p]));
+  const unpaid = state.charges.filter((c) => c.group_id === g.id && !c.paid && roster.has(c.participant_id));
+  if (unpaid.length === 0) return empty;
+
+  const cur = currentCycle();
+  const months = new Map<string, { cycle: string; label: string; cuotaLabel: string; isCurrent: boolean; members: { id: string; name: string; color: string }[] }>();
+  const members = new Map<string, { id: string; name: string; color: string; userId: string | null; count: number; total: number; months: string[] }>();
+
+  for (const c of unpaid) {
+    const p = roster.get(c.participant_id)!;
+    const m = months.get(c.cycle) ?? {
+      cycle: c.cycle,
+      label: cycleLabel(c.cycle),
+      cuotaLabel: fmtBs(c.cuota),
+      isCurrent: c.cycle === cur,
+      members: [],
+    };
+    m.members.push({ id: p.id, name: p.name, color: p.color });
+    months.set(c.cycle, m);
+
+    const e = members.get(p.id) ?? {
+      id: p.id,
+      name: p.name,
+      color: p.color,
+      userId: p.user_id,
+      count: 0,
+      total: 0,
+      months: [],
+    };
+    e.count += 1;
+    e.total += c.cuota;
+    e.months.push(cycleShort(c.cycle));
+    members.set(p.id, e);
+  }
 
   return {
-    balance: fmtBs(state.wallet.balance),
-    balanceUsd: `≈ ${fmtUsd(state.wallet.balance / rate)}`,
-    autoFund: state.wallet.auto_fund,
-    monthlyCommit: fmtBs(monthlyCommit),
-    monthsCover: monthlyCommit > 0 ? String(Math.floor(state.wallet.balance / monthlyCommit)) : "∞",
-    rateLabel: `1 USD = ${fmtBs(rate)}`,
-    scheduled,
-    transactions,
+    byMonth: [...months.values()].sort((a, b) => a.cycle.localeCompare(b.cycle)),
+    byMember: [...members.values()]
+      .sort((a, b) => b.total - a.total)
+      .map((m) => ({ ...m, totalLabel: fmtBs(m.total), monthsLabel: m.months.join(", ") })),
+    count: unpaid.length,
+    totalLabel: fmtBs(unpaid.reduce((a, c) => a + c.cuota, 0)),
+  };
+}
+
+/** The signed-in user's prepaid state in one group (null when not a member). */
+export function getMyPrepaid(state: State, groupId: string) {
+  const p = state.participants.find((x) => x.group_id === groupId && x.user_id === state.profile.id);
+  if (!p) return null;
+  return {
+    balance: p.prepaid_balance,
+    balanceLabel: fmtBs(p.prepaid_balance),
+    pendingAmount: p.prepay_pending,
+    pendingMonths: p.prepay_months,
+  };
+}
+
+/** Prepaid-balances screen figures: the user's balance per group, plus the
+ * balances of roster members in the groups they administer. */
+export function getPrepaid(state: State) {
+  const rate = state.profile.exchange_rate;
+  const rows = state.groups
+    .map((g) => {
+      const view = buildGroup(state, g);
+      const mine = getMyPrepaid(state, g.id);
+      if (!mine) return null;
+      return {
+        id: g.id,
+        name: view.name,
+        mono: view.mono,
+        color: view.color,
+        cuota: view.cuota,
+        balance: mine.balance,
+        balanceLabel: mine.balanceLabel,
+        monthsCover: view.perBs > 0 ? Math.floor(mine.balance / view.perBs) : 0,
+        pendingAmount: mine.pendingAmount,
+        pendingMonths: mine.pendingMonths,
+        owned: view.owned,
+      };
+    })
+    .filter((r): r is NonNullable<typeof r> => r !== null);
+
+  // Members with prepaid activity in the groups this user administers.
+  const memberRows = state.groups
+    .filter((g) => g.owner_id === state.profile.id)
+    .flatMap((g) =>
+      participantsOf(state, g.id)
+        .filter((p) => !p.is_self && (p.prepaid_balance > 0 || p.prepay_pending != null))
+        .map((p) => ({
+          id: p.id,
+          name: p.name,
+          color: p.color,
+          groupName: g.name || SERVICE_META[g.service_id].name,
+          balanceLabel: fmtBs(p.prepaid_balance),
+          pendingMonths: p.prepay_months,
+          pending: p.prepay_pending != null,
+        })),
+    );
+
+  const total = rows.reduce((a, r) => a + r.balance, 0);
+  return {
+    total: fmtBs(total),
+    totalUsd: `≈ ${fmtUsd(total / rate)}`,
+    rows,
+    memberRows,
   };
 }
 
@@ -366,41 +503,61 @@ export function getEditErrors(state: State) {
   return { amount, members, billingDay, valid: !amount && !members && !billingDay };
 }
 
-/** Live-calculated fields for the Deposit screen. */
-export function getDepositView(state: State) {
-  const rate = state.profile.exchange_rate;
-  const amt = parseFloat(state.depAmount) || 0;
-  const bs = state.depCur === "USD" ? amt * rate : amt;
-  return {
-    isUsd: state.depCur === "USD",
-    rateLabel: `1 USD = ${fmtBs(rate)}`,
-    result:
-      state.depCur === "USD" ? `Se acreditarán ${fmtBs(bs)} al fondo (al cambio actual)` : `Depósito de ${fmtBs(bs)}`,
-  };
-}
-
-/** Payment history for the current group. */
+/** Payment history for the current group, built from the charges ledger.
+ * Admins see, per month, how much was collected vs. the target (at that
+ * month's frozen cuota) and who paid; members see their own months. */
 export function getHistory(state: State) {
   const g = getCurrentGroup(state);
   if (!g) return null;
-  const rows = state.payments
-    .filter((p) => p.group_id === g.id)
-    .sort((a, b) => a.sort - b.sort)
-    .map((p) => ({
-      key: p.id,
-      month: p.month,
-      ok: p.ok,
-      mark: p.ok ? "✓" : "✕",
-      color: p.ok ? colors.positive : colors.danger,
-      bg: p.ok ? "rgba(54,208,122,0.12)" : "rgba(255,107,107,0.12)",
-      amount: g.cuota,
-    }));
-  const paidCount = rows.filter((r) => r.ok).length;
+  const me = state.participants.find((p) => p.group_id === g.id && p.user_id === state.profile.id);
+  const roster = new Map(participantsOf(state, g.id).map((p) => [p.id, p]));
+
+  const relevant = state.charges.filter(
+    (c) => c.group_id === g.id && roster.has(c.participant_id) && (g.owned || c.participant_id === me?.id),
+  );
+  const byCycle = new Map<string, typeof relevant>();
+  for (const c of relevant) byCycle.set(c.cycle, [...(byCycle.get(c.cycle) ?? []), c]);
+
+  const months = [...byCycle.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([cycle, rows]) => {
+      const cuota = rows[0].cuota;
+      const paidRows = rows.filter((r) => r.paid);
+      const target = cuota * rows.length;
+      const collected = cuota * paidRows.length;
+      return {
+        cycle,
+        monthShort: cycleShort(cycle),
+        label: cycleLabel(cycle),
+        cuota,
+        cuotaLabel: fmtBs(cuota),
+        target,
+        collected,
+        collectedLabel: fmtBs(collected),
+        pendingLabel: fmtBs(target - collected),
+        paidCount: paidRows.length,
+        totalCount: rows.length,
+        complete: paidRows.length === rows.length,
+        detail: rows
+          .map((r) => {
+            const p = roster.get(r.participant_id)!;
+            return { id: p.id, name: p.name, color: p.color, paid: r.paid };
+          })
+          .sort((a, b) => Number(a.paid) - Number(b.paid)),
+      };
+    });
+
+  const totalCollected = months.reduce((a, m) => a + m.collected, 0);
+  const totalPending = months.reduce((a, m) => a + (m.target - m.collected), 0);
   return {
     group: g,
-    rows,
-    total: fmtBs(paidCount * g.perBs),
-    year: 2026,
+    owned: g.owned,
+    months,
+    maxTarget: Math.max(1, ...months.map((m) => m.target)),
+    totalLabel: fmtBs(totalCollected),
+    pendingLabel: fmtBs(totalPending),
+    caption: g.owned ? "cobros por mes" : "tus cuotas por mes",
+    totalCaption: g.owned ? "Total cobrado" : "Total pagado",
   };
 }
 

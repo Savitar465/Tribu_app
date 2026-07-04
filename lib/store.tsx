@@ -12,12 +12,12 @@ import {
 import { createClient } from "@/utils/supabase/client";
 import * as api from "@/lib/db/api";
 import type { ProfileMatch } from "@/lib/db/api";
-import type { AppData, GroupPaymentRow, GroupRow, NotificationRow, ParticipantRow, WalletTxRow } from "@/lib/db/types";
+import type { AppData, ChargeRow, GroupPaymentRow, GroupRow, NotificationRow, ParticipantRow, WalletTxRow } from "@/lib/db/types";
 import { MEMBER_COLORS, SERVICE_META } from "@/lib/data";
 import { getOfficialRate } from "@/lib/rates";
 import { fmtBs, sanitizeNumeric } from "@/lib/format";
 import { BACK_MAP } from "@/lib/navigation";
-import { currentCycle, getEditErrors } from "@/lib/selectors";
+import { buildGroup, currentCycle, cycleLabel, getEditErrors } from "@/lib/selectors";
 import type { Currency, Screen, ServiceId } from "@/lib/types";
 
 /** Full UI state: the fetched data plus transient navigation/draft state. */
@@ -27,6 +27,7 @@ export interface State {
   groups: GroupRow[];
   participants: ParticipantRow[];
   payments: GroupPaymentRow[];
+  charges: ChargeRow[];
   wallet: AppData["wallet"];
   transactions: WalletTxRow[];
   notifications: NotificationRow[];
@@ -46,8 +47,6 @@ export interface State {
   editBillingDay: string;
   /** Draft "round each cuota up to a whole Bs" flag for the group being edited. */
   editRound: boolean;
-  depAmount: string;
-  depCur: Currency;
   rateDraft: string;
   /** True while fetching the official BCB rate. */
   rateLoading: boolean;
@@ -76,6 +75,7 @@ function initState(data: AppData): State {
     groups: data.groups,
     participants: data.participants,
     payments: data.payments,
+    charges: data.charges,
     wallet: data.wallet,
     transactions: data.transactions,
     notifications: data.notifications,
@@ -88,8 +88,6 @@ function initState(data: AppData): State {
     editMembers: 1,
     editBillingDay: "5",
     editRound: false,
-    depAmount: "50",
-    depCur: "BOB",
     rateDraft: String(data.profile.exchange_rate),
     rateLoading: false,
     officialRate: null,
@@ -125,9 +123,6 @@ type Action =
   | { type: "setRateLoading"; value: boolean }
   | { type: "setOfficial"; rate: number; fecha: string }
   | { type: "applyOfficialSync"; rate: number; syncedOn: string }
-  | { type: "openDeposit" }
-  | { type: "setDepAmount"; value: string }
-  | { type: "setDepCur"; cur: Currency }
   | { type: "setCreate"; field: "name" | "amount" | "members" | "billingDay"; value: string }
   | { type: "setCreateCur"; cur: Currency }
   | { type: "setCreateColor"; color: string }
@@ -141,11 +136,14 @@ type Action =
   | { type: "applyGroupCost"; groupId: string; amount: number; currency: Currency; members: number; billingDay: number; due: string; round: boolean; billedCuota: number | null }
   | { type: "applyGroupQr"; groupId: string; url: string | null }
   | { type: "applyGroupPayMethods"; groupId: string; paypal: string | null; bank: string | null }
-  | { type: "applyDeposit"; balance: number; tx: WalletTxRow }
-  | { type: "applyAutoFund"; value: boolean }
   | { type: "applyRate"; rate: number }
-  | { type: "applySubmitPay"; participantId: string; proofUrl: string | null }
+  | { type: "applySubmitPay"; participantId: string; proofUrl: string | null; cycles: string[] }
+  | { type: "setCharges"; charges: ChargeRow[] }
+  | { type: "applyChargesPaid"; participantId: string; cycles: string[]; paid: boolean }
+  | { type: "applySubmitPrepay"; participantId: string; amount: number; months: number; proofUrl: string }
   | { type: "applyReview"; participantId: string; paid: boolean }
+  | { type: "applyPrepayReview"; participantId: string; approved: boolean; balance: number; paid: boolean }
+  | { type: "applyParticipantBilling"; participantId: string; balance: number; paid: boolean; cycle: string }
   | { type: "applyCreateGroup"; group: GroupRow; participants: ParticipantRow[] }
   | { type: "applyBilledCycle"; groupId: string; cycle: string; cuota: number }
   | { type: "setNotifications"; notifications: NotificationRow[] }
@@ -218,13 +216,6 @@ function reducer(state: State, action: Action): State {
         },
         `Tipo de cambio oficial actualizado: ${action.rate} Bs`,
       );
-
-    case "openDeposit":
-      return { ...state, screen: "deposit", depAmount: "50", depCur: "BOB" };
-    case "setDepAmount":
-      return { ...state, depAmount: sanitizeNumeric(action.value) };
-    case "setDepCur":
-      return { ...state, depCur: action.cur };
 
     case "setCreate": {
       const key = { name: "createName", amount: "createAmount", members: "createMembers", billingDay: "createBillingDay" }[
@@ -303,13 +294,6 @@ function reducer(state: State, action: Action): State {
       );
       return flash({ ...state, groups }, "Métodos de cobro actualizados");
     }
-    case "applyDeposit":
-      return flash(
-        { ...state, wallet: { ...state.wallet, balance: action.balance }, transactions: [action.tx, ...state.transactions], screen: "wallet" },
-        "Depósito registrado en el fondo común",
-      );
-    case "applyAutoFund":
-      return { ...state, wallet: { ...state.wallet, auto_fund: action.value } };
     case "applyRate":
       return flash(
         { ...state, profile: { ...state.profile, exchange_rate: action.rate }, screen: "wallet" },
@@ -318,15 +302,70 @@ function reducer(state: State, action: Action): State {
     case "applySubmitPay": {
       const participants = state.participants.map((p) =>
         p.id === action.participantId
-          ? { ...p, proof_pending: true, paid: false, proof_url: action.proofUrl }
+          ? { ...p, proof_pending: true, proof_url: action.proofUrl, pay_cycles: action.cycles }
           : p,
       );
-      return flash({ ...state, participants, screen: "group" }, "Comprobante enviado · pendiente de validación");
+      const msg =
+        action.cycles.length > 1
+          ? `Comprobante de ${action.cycles.length} meses enviado · pendiente de validación`
+          : "Comprobante enviado · pendiente de validación";
+      return flash({ ...state, participants, screen: "group" }, msg);
+    }
+    case "setCharges":
+      return { ...state, charges: action.charges };
+    case "applyChargesPaid": {
+      const charges = state.charges.map((c) =>
+        c.participant_id === action.participantId && action.cycles.includes(c.cycle)
+          ? { ...c, paid: action.paid, paid_at: action.paid ? new Date().toISOString() : null }
+          : c,
+      );
+      return { ...state, charges };
+    }
+    case "applySubmitPrepay": {
+      const participants = state.participants.map((p) =>
+        p.id === action.participantId
+          ? { ...p, prepay_pending: action.amount, prepay_months: action.months, proof_url: action.proofUrl, proof_pending: true }
+          : p,
+      );
+      return flash(
+        { ...state, participants, screen: "group" },
+        `Pago adelantado de ${action.months} ${action.months === 1 ? "mes" : "meses"} enviado · pendiente de aprobación`,
+      );
+    }
+    case "applyPrepayReview": {
+      const reviewed = state.participants.find((p) => p.id === action.participantId);
+      const participants = state.participants.map((p) =>
+        p.id === action.participantId
+          ? {
+              ...p,
+              prepaid_balance: action.balance,
+              paid: action.paid,
+              proof_pending: false,
+              prepay_pending: null,
+              prepay_months: null,
+            }
+          : p,
+      );
+      const more =
+        state.screen === "approve" &&
+        participants.some((p) => p.group_id === reviewed?.group_id && p.proof_pending);
+      const msg = action.approved
+        ? `Pago adelantado aprobado · saldo ${fmtBs(action.balance)}`
+        : "Pago adelantado rechazado";
+      return flash({ ...state, participants, screen: more ? "approve" : "admin" }, msg);
+    }
+    case "applyParticipantBilling": {
+      const participants = state.participants.map((p) =>
+        p.id === action.participantId
+          ? { ...p, prepaid_balance: action.balance, paid: action.paid, proof_pending: false, billed_cycle: action.cycle }
+          : p,
+      );
+      return { ...state, participants };
     }
     case "applyReview": {
       const reviewed = state.participants.find((p) => p.id === action.participantId);
       const participants = state.participants.map((p) =>
-        p.id === action.participantId ? { ...p, paid: action.paid, proof_pending: false } : p,
+        p.id === action.participantId ? { ...p, paid: action.paid, proof_pending: false, pay_cycles: null } : p,
       );
       // Stay on the approve screen while more proofs from this group are queued.
       const more =
@@ -392,13 +431,13 @@ export interface Actions {
   fetchOfficialRate: () => void;
   initOfficialRate: () => void;
   saveRate: () => void;
-  openDeposit: () => void;
-  setDepAmount: (value: string) => void;
-  setDepCur: (cur: Currency) => void;
-  doDeposit: () => void;
-  toggleAutoFund: () => void;
-  /** Submit the cuota payment, optionally uploading a receipt image first. */
-  submitPay: (proof?: File | null) => void;
+  /** Submit the cuota payment, optionally uploading a receipt image first.
+   * `cycles` lists the months being paid (defaults to the current month). */
+  submitPay: (proof?: File | null, cycles?: string[]) => void;
+  /** Submit a prepay of N months (receipt required) for admin approval. */
+  submitPrepay: (months: number, proof: File | null) => void;
+  /** Send a payment reminder notification to a member with owed months. */
+  remindMember: (participantId: string) => void;
   reviewMember: (participantId: string, approve: boolean) => void;
   setCreate: (field: "name" | "amount" | "members" | "billingDay", value: string) => void;
   setCreateCur: (cur: Currency) => void;
@@ -440,6 +479,9 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
     const fail = (e: unknown) =>
       dispatch({ type: "flash", msg: e instanceof Error ? e.message : "Ocurrió un error" });
     const rate = () => ref.current.profile.exchange_rate;
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    // Current per-member cuota (Bs): frozen after this month's charge, else today's preview.
+    const cuotaOf = (g: GroupRow) => buildGroup(ref.current, g).perBs;
     // Shared guard for image uploads (QR / receipts): null when acceptable.
     const imageError = (file: File) =>
       !/^image\/(png|jpe?g|webp)$/.test(file.type)
@@ -498,9 +540,6 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
       initOfficialRate: () => {
         void syncOfficial(false);
       },
-      openDeposit: () => dispatch({ type: "openDeposit" }),
-      setDepAmount: (value) => dispatch({ type: "setDepAmount", value }),
-      setDepCur: (cur) => dispatch({ type: "setDepCur", cur }),
       setCreate: (field, value) => dispatch({ type: "setCreate", field, value }),
       setCreateCur: (cur) => dispatch({ type: "setCreateCur", cur }),
       setCreateColor: (color) => dispatch({ type: "setCreateColor", color }),
@@ -611,35 +650,7 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
         }
       },
 
-      doDeposit: async () => {
-        const s = ref.current;
-        const amt = parseFloat(s.depAmount) || 0;
-        const bs = s.depCur === "USD" ? amt * rate() : amt;
-        const balance = Math.round((s.wallet.balance + bs) * 100) / 100;
-        try {
-          const tx = await api.deposit(supabase, userId, balance, {
-            label: "Depósito",
-            sub: s.depCur === "USD" ? "hoy · depósito en USD" : "hoy · QR Simple",
-            amount: bs,
-          });
-          dispatch({ type: "applyDeposit", balance, tx });
-        } catch (e) {
-          fail(e);
-        }
-      },
-
-      toggleAutoFund: async () => {
-        const next = !ref.current.wallet.auto_fund;
-        dispatch({ type: "applyAutoFund", value: next }); // optimistic
-        try {
-          await api.setAutoFund(supabase, userId, next);
-        } catch (e) {
-          dispatch({ type: "applyAutoFund", value: !next }); // revert
-          fail(e);
-        }
-      },
-
-      submitPay: async (proof) => {
+      submitPay: async (proof, cycles) => {
         const g = currentGroup();
         if (!g) return;
         if (proof) {
@@ -657,20 +668,119 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
           dispatch({ type: "flash", msg: "No tienes una ficha en este grupo" });
           return;
         }
+        // Oldest-first: a simple payment settles the oldest owed month before
+        // the current one (explicit cycles — e.g. "pay everything" — win).
+        let paying = cycles && cycles.length > 0 ? cycles : [];
+        if (paying.length === 0) {
+          const owed = ref.current.charges
+            .filter((c) => c.participant_id === me.id && !c.paid)
+            .sort((a, b) => a.cycle.localeCompare(b.cycle));
+          paying = owed.length > 0 ? [owed[0].cycle] : [currentCycle()];
+        }
         try {
           const proofUrl = proof ? await api.uploadPaymentProof(supabase, g.id, me.id, proof) : null;
-          await api.submitPayment(supabase, me.id, proofUrl);
-          dispatch({ type: "applySubmitPay", participantId: me.id, proofUrl });
+          await api.submitPayment(supabase, me.id, proofUrl, paying);
+          dispatch({ type: "applySubmitPay", participantId: me.id, proofUrl, cycles: paying });
+        } catch (e) {
+          fail(e);
+        }
+      },
+
+      // A prepay covers N months at today's cuota; the receipt is required and
+      // reviewed once — afterwards each monthly charge deducts from the balance.
+      submitPrepay: async (months, proof) => {
+        const g = currentGroup();
+        if (!g || months < 1) return;
+        if (!proof) {
+          dispatch({ type: "flash", msg: "Adjunta el comprobante de tu pago adelantado" });
+          return;
+        }
+        const err = imageError(proof);
+        if (err) {
+          dispatch({ type: "flash", msg: err });
+          return;
+        }
+        const me = ref.current.participants.find((p) => p.group_id === g.id && p.user_id === userId);
+        if (!me) {
+          dispatch({ type: "flash", msg: "No tienes una ficha en este grupo" });
+          return;
+        }
+        if (me.prepay_pending != null) {
+          dispatch({ type: "flash", msg: "Ya tienes un pago adelantado en revisión" });
+          return;
+        }
+        await syncOfficial(true); // price the advance at today's official rate
+        const group = ref.current.groups.find((x) => x.id === g.id);
+        if (!group) return;
+        const amount = round2(cuotaOf(group) * months);
+        try {
+          const proofUrl = await api.uploadPaymentProof(supabase, g.id, me.id, proof);
+          await api.submitPrepay(supabase, me.id, { amount, months, proofUrl });
+          dispatch({ type: "applySubmitPrepay", participantId: me.id, amount, months, proofUrl });
         } catch (e) {
           fail(e);
         }
       },
 
       // Approve/reject a member's proof (generic — works for any participant).
+      // A pending prepay is credited to the balance on approval, immediately
+      // covering the current month's cuota when it reaches.
       reviewMember: async (participantId, approve) => {
+        const p = ref.current.participants.find((x) => x.id === participantId);
         try {
-          await api.reviewParticipant(supabase, participantId, approve);
-          dispatch({ type: "applyReview", participantId, paid: approve });
+          if (p && p.prepay_pending != null) {
+            let balance = p.prepaid_balance;
+            let paid = p.paid;
+            if (approve) {
+              balance = round2(balance + p.prepay_pending);
+              const group = ref.current.groups.find((g) => g.id === p.group_id);
+              const cuota = group ? cuotaOf(group) : 0;
+              if (!paid && cuota > 0 && balance >= cuota) {
+                balance = round2(balance - cuota);
+                paid = true;
+              }
+            }
+            await api.updateParticipantBilling(supabase, participantId, {
+              prepaid_balance: balance,
+              paid,
+              proof_pending: false,
+              prepay_pending: null,
+              prepay_months: null,
+            });
+            if (p.user_id) {
+              await api.insertNotifications(supabase, [
+                {
+                  user_id: p.user_id,
+                  group_id: p.group_id,
+                  title: approve ? "Pago adelantado aprobado" : "Pago adelantado rechazado",
+                  body: approve
+                    ? `Se acreditaron ${fmtBs(p.prepay_pending)} · tu saldo adelantado es ${fmtBs(balance)}.`
+                    : "Tu comprobante de pago adelantado fue rechazado · contacta al admin.",
+                },
+              ]);
+            }
+            // The credited balance may have auto-covered this month's charge.
+            if (approve && paid && !p.paid) {
+              await api.setChargesPaid(supabase, participantId, [currentCycle()], true);
+              dispatch({ type: "applyChargesPaid", participantId, cycles: [currentCycle()], paid: true });
+            }
+            dispatch({ type: "applyPrepayReview", participantId, approved: approve, balance, paid });
+            return;
+          }
+          // Regular receipt: it pays the cycles recorded at submission (the
+          // current month, or every owed month when settling arrears).
+          const cycles = p?.pay_cycles?.length ? p.pay_cycles : [currentCycle()];
+          const paidNow = approve ? (cycles.includes(currentCycle()) ? true : (p?.paid ?? false)) : false;
+          await api.updateParticipantBilling(supabase, participantId, {
+            paid: paidNow,
+            proof_pending: false,
+            pay_cycles: null,
+          });
+          if (approve) {
+            await api.setChargesPaid(supabase, participantId, cycles, true);
+            dispatch({ type: "applyChargesPaid", participantId, cycles, paid: true });
+          }
+          dispatch({ type: "applyReview", participantId, paid: paidNow });
         } catch (e) {
           fail(e);
         }
@@ -810,10 +920,43 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
       },
 
       // Admin manually flips a member's paid/pending state (no navigation).
+      // The current month's charge row (if any) is kept in sync.
       setMemberPaid: async (participantId, paid) => {
         try {
           await api.reviewParticipant(supabase, participantId, paid);
+          await api.setChargesPaid(supabase, participantId, [currentCycle()], paid);
+          dispatch({ type: "applyChargesPaid", participantId, cycles: [currentCycle()], paid });
           dispatch({ type: "applyMemberPaid", participantId, paid });
+        } catch (e) {
+          fail(e);
+        }
+      },
+
+      // Reminder notification listing the member's owed months at each month's price.
+      remindMember: async (participantId) => {
+        const p = ref.current.participants.find((x) => x.id === participantId);
+        if (!p) return;
+        if (!p.user_id) {
+          dispatch({ type: "flash", msg: `${p.name} no tiene cuenta vinculada · recuérdale por otro medio` });
+          return;
+        }
+        const g = ref.current.groups.find((x) => x.id === p.group_id);
+        const owed = ref.current.charges
+          .filter((c) => c.participant_id === p.id && !c.paid)
+          .sort((a, b) => a.cycle.localeCompare(b.cycle));
+        if (!g || owed.length === 0) return;
+        const detail = owed.map((c) => `${cycleLabel(c.cycle)} (${fmtBs(c.cuota)})`).join(", ");
+        const total = fmtBs(owed.reduce((a, c) => a + c.cuota, 0));
+        try {
+          await api.insertNotifications(supabase, [
+            {
+              user_id: p.user_id,
+              group_id: g.id,
+              title: `Recordatorio de pago · ${g.name}`,
+              body: `Tienes ${owed.length === 1 ? "1 cuota pendiente" : `${owed.length} cuotas pendientes`}: ${detail} · total ${total}. Puedes ponerte al día desde "Pagar cuota".`,
+            },
+          ]);
+          dispatch({ type: "flash", msg: `Recordatorio enviado a ${p.name}` });
         } catch (e) {
           fail(e);
         }
@@ -854,8 +997,11 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
       },
 
       // Once per month per owned group, on/after its billing day: refresh the
-      // official rate (so USD cuotas are charged at today's rate), notify every
-      // member with an account, and stamp the cycle so it runs only once.
+      // official rate (so USD cuotas are charged at today's rate), settle each
+      // member against their prepaid balance (auto-paid when it covers the
+      // cuota, otherwise the month starts unpaid and the remainder is kept as
+      // compensation), notify everyone, and stamp the cycle so it runs once.
+      // Mirrors supabase/functions/process-billing.
       processBilling: async () => {
         const now = new Date();
         const cycle = now.toLocaleDateString("en-CA").slice(0, 7); // yyyy-mm
@@ -873,20 +1019,67 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
             const totalBs = g.currency === "USD" ? g.amount * rate : g.amount;
             const n = Math.max(1, g.members_target);
             const per = g.round_cuota ? Math.ceil(totalBs / n) : totalBs / n;
-            const recipients = ref.current.participants.filter((p) => p.group_id === g.id && p.user_id);
-            await api.insertNotifications(
-              supabase,
-              recipients.map((p) => ({
-                user_id: p.user_id as string,
+            const roster = ref.current.participants.filter((p) => p.group_id === g.id);
+            const notes: { user_id: string; group_id: string; title: string; body: string }[] = [];
+            const chargeRows: { group_id: string; participant_id: string; cycle: string; cuota: number; paid: boolean; paid_at: string | null }[] = [];
+
+            for (const p of roster) {
+              // The owner collects (their own row is untouched by the charge).
+              if (p.is_self) {
+                if (p.user_id) {
+                  notes.push({
+                    user_id: p.user_id,
+                    group_id: g.id,
+                    title: `Cobro de ${g.name}`,
+                    body: `Se generó el cobro de ${month}: la cuota es ${fmtBs(per)}.`,
+                  });
+                }
+                continue;
+              }
+              // Per-participant stamp: never deduct the same cycle twice.
+              if (p.billed_cycle === cycle) continue;
+
+              let balance = p.prepaid_balance;
+              let paid = false;
+              let body: string;
+              if (per > 0 && balance >= per) {
+                balance = round2(balance - per);
+                paid = true;
+                body = `Cuota de ${month} (${fmtBs(per)}) cubierta con tu saldo adelantado · te quedan ${fmtBs(balance)}.`;
+                if (balance < per) body += " Recarga para seguir cubierto el próximo mes.";
+              } else if (balance > 0) {
+                body = `Tu saldo adelantado (${fmtBs(balance)}) no cubre la cuota de ${month} (${fmtBs(per)}). Se guardará como compensación para tu próxima recarga · mientras tanto paga tu cuota del mes.`;
+              } else {
+                body = `Se generó el cobro de ${month}: tu cuota es ${fmtBs(per)}.`;
+              }
+
+              await api.updateParticipantBilling(supabase, p.id, {
+                prepaid_balance: balance,
+                paid,
+                proof_pending: false,
+                billed_cycle: cycle,
+              });
+              dispatch({ type: "applyParticipantBilling", participantId: p.id, balance, paid, cycle });
+              chargeRows.push({
                 group_id: g.id,
-                title: `Cobro de ${g.name}`,
-                body: `Se generó el cobro de ${month}: tu cuota es ${fmtBs(per)}.`,
-              })),
-            );
+                participant_id: p.id,
+                cycle,
+                cuota: per,
+                paid,
+                paid_at: paid ? new Date().toISOString() : null,
+              });
+              if (p.user_id) {
+                notes.push({ user_id: p.user_id, group_id: g.id, title: `Cobro de ${g.name}`, body });
+              }
+            }
+
+            await api.insertCharges(supabase, chargeRows);
+            await api.insertNotifications(supabase, notes);
             await api.markGroupBilled(supabase, g.id, cycle, per);
             dispatch({ type: "applyBilledCycle", groupId: g.id, cycle, cuota: per });
           }
-          // Refresh the feed so the owner's own charge notifications appear.
+          // Refresh the ledger and the feed so this run's rows appear.
+          dispatch({ type: "setCharges", charges: await api.fetchCharges(supabase) });
           dispatch({ type: "setNotifications", notifications: await api.fetchNotifications(supabase) });
         } catch (e) {
           fail(e);

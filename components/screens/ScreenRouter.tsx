@@ -8,9 +8,9 @@ import { CreateScreen } from "./CreateScreen";
 import { PayScreen } from "./PayScreen";
 import { QrScreen } from "./QrScreen";
 import { ApproveScreen } from "./ApproveScreen";
+import { ArrearsScreen } from "./ArrearsScreen";
 import { WalletScreen } from "./WalletScreen";
 import { FxScreen } from "./FxScreen";
-import { DepositScreen } from "./DepositScreen";
 import { HistoryScreen } from "./HistoryScreen";
 import { NotificationsScreen } from "./NotificationsScreen";
 import { ProfileScreen } from "./ProfileScreen";
@@ -25,9 +25,9 @@ const SCREENS: Record<Screen, React.ComponentType> = {
   pay: PayScreen,
   qr: QrScreen,
   approve: ApproveScreen,
+  arrears: ArrearsScreen,
   wallet: WalletScreen,
   fx: FxScreen,
-  deposit: DepositScreen,
   history: HistoryScreen,
   notifications: NotificationsScreen,
   profile: ProfileScreen,
