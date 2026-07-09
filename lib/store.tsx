@@ -17,7 +17,8 @@ import { MEMBER_COLORS, SERVICE_META } from "@/lib/data";
 import { getOfficialRate } from "@/lib/rates";
 import { fmtBs, sanitizeNumeric } from "@/lib/format";
 import { BACK_MAP } from "@/lib/navigation";
-import { buildGroup, currentCycle, cycleLabel, getEditErrors } from "@/lib/selectors";
+import { debtsByOwner, memberCuotaBs } from "@/lib/paylogic";
+import { buildGroup, currentCycle, cycleLabel, getEditErrors, getMemberCuota } from "@/lib/selectors";
 import type { Currency, Screen, ServiceId } from "@/lib/types";
 
 /** Full UI state: the fetched data plus transient navigation/draft state. */
@@ -61,6 +62,8 @@ export interface State {
   createCur: Currency;
   /** Brand color for a custom ("others") group. */
   createColor: string;
+  /** Whether the creating admin occupies a subscription slot (self row). */
+  createAdminIn: boolean;
   /** Draft input (name or email) for the add-member modal. */
   memberDraft: string;
 
@@ -98,6 +101,7 @@ function initState(data: AppData): State {
     createBillingDay: "5",
     createCur: "BOB",
     createColor: MEMBER_COLORS[0],
+    createAdminIn: true,
     memberDraft: "",
     toast: "",
     toastKey: 0,
@@ -126,6 +130,7 @@ type Action =
   | { type: "setCreate"; field: "name" | "amount" | "members" | "billingDay"; value: string }
   | { type: "setCreateCur"; cur: Currency }
   | { type: "setCreateColor"; color: string }
+  | { type: "setCreateAdminIn"; value: boolean }
   | { type: "setMemberDraft"; value: string }
   // applied after a successful persist:
   | { type: "applyAddParticipant"; participant: ParticipantRow; members: number }
@@ -133,13 +138,17 @@ type Action =
   | { type: "applyRenameMember"; participantId: string; name: string }
   | { type: "applyMoveMember"; a: { id: string; sort: number }; b: { id: string; sort: number } }
   | { type: "applyMemberPaid"; participantId: string; paid: boolean }
+  | { type: "applyMemberPrice"; participantId: string; amount: number | null }
   | { type: "applyGroupCost"; groupId: string; amount: number; currency: Currency; members: number; billingDay: number; due: string; round: boolean; billedCuota: number | null }
   | { type: "applyGroupQr"; groupId: string; url: string | null }
   | { type: "applyGroupPayMethods"; groupId: string; paypal: string | null; bank: string | null }
   | { type: "applyRate"; rate: number }
-  | { type: "applySubmitPay"; participantId: string; proofUrl: string | null; cycles: string[] }
+  | { type: "applySubmitPay"; participantId: string; proofUrl: string | null; cycles: string[]; proofBy: string | null }
+  | { type: "applyAdminPay"; participantId: string; paidNow: boolean }
+  | { type: "applyCombinedPay"; items: { participantId: string; cycles: string[] }[]; proofUrl: string | null }
+  | { type: "applyAdminParticipation"; groupId: string; participate: boolean; participant: ParticipantRow | null; removedId: string | null }
   | { type: "setCharges"; charges: ChargeRow[] }
-  | { type: "applyChargesPaid"; participantId: string; cycles: string[]; paid: boolean }
+  | { type: "applyChargesPaid"; participantId: string; cycles: string[]; paid: boolean; paidBy?: string | null }
   | { type: "applySubmitPrepay"; participantId: string; amount: number; months: number; proofUrl: string }
   | { type: "applyReview"; participantId: string; paid: boolean }
   | { type: "applyPrepayReview"; participantId: string; approved: boolean; balance: number; paid: boolean }
@@ -228,6 +237,8 @@ function reducer(state: State, action: Action): State {
       return { ...state, createCur: action.cur };
     case "setCreateColor":
       return { ...state, createColor: action.color };
+    case "setCreateAdminIn":
+      return { ...state, createAdminIn: action.value };
     case "setMemberDraft":
       return { ...state, memberDraft: action.value };
 
@@ -265,6 +276,16 @@ function reducer(state: State, action: Action): State {
       return flash({ ...state, participants }, action.paid ? "Marcado como pagado" : "Marcado como pendiente");
     }
 
+    case "applyMemberPrice": {
+      const participants = state.participants.map((p) =>
+        p.id === action.participantId ? { ...p, custom_amount: action.amount } : p,
+      );
+      return flash(
+        { ...state, participants },
+        action.amount != null ? "Cuota personalizada guardada" : "Cuota personalizada eliminada",
+      );
+    }
+
     case "applyGroupCost": {
       const groups = state.groups.map((g) =>
         g.id === action.groupId
@@ -300,23 +321,68 @@ function reducer(state: State, action: Action): State {
         "Tipo de cambio actualizado",
       );
     case "applySubmitPay": {
+      const target = state.participants.find((p) => p.id === action.participantId);
       const participants = state.participants.map((p) =>
         p.id === action.participantId
-          ? { ...p, proof_pending: true, proof_url: action.proofUrl, pay_cycles: action.cycles }
+          ? { ...p, proof_pending: true, proof_url: action.proofUrl, pay_cycles: action.cycles, proof_by: action.proofBy }
           : p,
       );
-      const msg =
-        action.cycles.length > 1
+      const msg = action.proofBy
+        ? `Pago de ${target?.name ?? "otro miembro"} enviado · pendiente de validación`
+        : action.cycles.length > 1
           ? `Comprobante de ${action.cycles.length} meses enviado · pendiente de validación`
           : "Comprobante enviado · pendiente de validación";
       return flash({ ...state, participants, screen: "group" }, msg);
+    }
+    // Admin payment (own cuota or on behalf of a member): approved on the spot,
+    // no receipt/review round-trip.
+    case "applyAdminPay": {
+      const participants = state.participants.map((p) =>
+        p.id === action.participantId
+          ? { ...p, paid: action.paidNow ? true : p.paid, proof_pending: false, pay_cycles: null, proof_by: null }
+          : p,
+      );
+      return flash({ ...state, participants, screen: "group" }, "Pago registrado ✓");
+    }
+    // Combined payment: every bundled roster row goes into review at once.
+    case "applyCombinedPay": {
+      const byId = new Map(action.items.map((i) => [i.participantId, i.cycles]));
+      const participants = state.participants.map((p) =>
+        byId.has(p.id)
+          ? { ...p, proof_pending: true, proof_url: action.proofUrl, pay_cycles: byId.get(p.id)!, proof_by: null }
+          : p,
+      );
+      const n = action.items.length;
+      return flash(
+        { ...state, participants, screen: "home" },
+        `Pago combinado enviado · ${n} ${n === 1 ? "grupo" : "grupos"} en revisión`,
+      );
+    }
+    case "applyAdminParticipation": {
+      const groups = state.groups.map((g) =>
+        g.id === action.groupId ? { ...g, admin_participates: action.participate } : g,
+      );
+      const participants = action.participate
+        ? action.participant
+          ? [...state.participants, action.participant]
+          : state.participants
+        : state.participants.filter((p) => p.id !== action.removedId);
+      return flash(
+        { ...state, groups, participants },
+        action.participate ? "Ahora ocupas un lugar en el grupo" : "Ya no ocupas un lugar en el grupo",
+      );
     }
     case "setCharges":
       return { ...state, charges: action.charges };
     case "applyChargesPaid": {
       const charges = state.charges.map((c) =>
         c.participant_id === action.participantId && action.cycles.includes(c.cycle)
-          ? { ...c, paid: action.paid, paid_at: action.paid ? new Date().toISOString() : null }
+          ? {
+              ...c,
+              paid: action.paid,
+              paid_at: action.paid ? new Date().toISOString() : null,
+              paid_by: action.paid ? (action.paidBy ?? null) : null,
+            }
           : c,
       );
       return { ...state, charges };
@@ -365,7 +431,9 @@ function reducer(state: State, action: Action): State {
     case "applyReview": {
       const reviewed = state.participants.find((p) => p.id === action.participantId);
       const participants = state.participants.map((p) =>
-        p.id === action.participantId ? { ...p, paid: action.paid, proof_pending: false, pay_cycles: null } : p,
+        p.id === action.participantId
+          ? { ...p, paid: action.paid, proof_pending: false, pay_cycles: null, proof_by: null }
+          : p,
       );
       // Stay on the approve screen while more proofs from this group are queued.
       const more =
@@ -432,8 +500,18 @@ export interface Actions {
   initOfficialRate: () => void;
   saveRate: () => void;
   /** Submit the cuota payment, optionally uploading a receipt image first.
-   * `cycles` lists the months being paid (defaults to the current month). */
-  submitPay: (proof?: File | null, cycles?: string[]) => void;
+   * `cycles` lists the months being paid (defaults to the oldest owed month);
+   * `forParticipantId` pays on behalf of another member of the group. A group
+   * admin's payment is approved on the spot (no receipt required). */
+  submitPay: (proof?: File | null, cycles?: string[], forParticipantId?: string | null) => void;
+  /** Pay every debt collected by one administrator (possibly across several
+   * groups) in a single transaction, with one shared receipt. */
+  submitCombinedPay: (ownerId: string, proof: File | null) => void;
+  /** Toggle whether the admin occupies a slot in the current group (self row). */
+  setAdminParticipation: (participate: boolean) => void;
+  /** Soft-delete exported (already paid) charge rows. True on success. */
+  deleteExportedCharges: (ids: string[]) => Promise<boolean>;
+  setCreateAdminIn: (value: boolean) => void;
   /** Submit a prepay of N months (receipt required) for admin approval. */
   submitPrepay: (months: number, proof: File | null) => void;
   /** Send a payment reminder notification to a member with owed months. */
@@ -452,6 +530,8 @@ export interface Actions {
   addMemberUser: (profile: ProfileMatch) => Promise<boolean>;
   removeMember: (participantId: string) => void;
   setMemberPaid: (participantId: string, paid: boolean) => void;
+  /** Set a member's custom monthly price in the group's currency ("" = default). True on success. */
+  setMemberPrice: (participantId: string, raw: string) => Promise<boolean>;
   renameMember: (participantId: string, name: string) => void;
   moveMember: (participantId: string, dir: -1 | 1) => void;
   /** Run due monthly charges for owned groups: refresh the official rate and notify each member. */
@@ -650,7 +730,7 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
         }
       },
 
-      submitPay: async (proof, cycles) => {
+      submitPay: async (proof, cycles, forParticipantId) => {
         const g = currentGroup();
         if (!g) return;
         if (proof) {
@@ -663,8 +743,11 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
         // Refresh the dollar price on every payment request so the cuota reflects
         // the current official rate.
         await syncOfficial(true);
-        const me = ref.current.participants.find((p) => p.group_id === g.id && p.user_id === userId);
-        if (!me) {
+        // Paying for oneself by default; `forParticipantId` targets a fellow member.
+        const target = forParticipantId
+          ? ref.current.participants.find((p) => p.id === forParticipantId && p.group_id === g.id)
+          : ref.current.participants.find((p) => p.group_id === g.id && p.user_id === userId);
+        if (!target) {
           dispatch({ type: "flash", msg: "No tienes una ficha en este grupo" });
           return;
         }
@@ -673,18 +756,108 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
         let paying = cycles && cycles.length > 0 ? cycles : [];
         if (paying.length === 0) {
           const owed = ref.current.charges
-            .filter((c) => c.participant_id === me.id && !c.paid)
+            .filter((c) => c.participant_id === target.id && !c.paid)
             .sort((a, b) => a.cycle.localeCompare(b.cycle));
           paying = owed.length > 0 ? [owed[0].cycle] : [currentCycle()];
         }
+        const isAdmin = g.owner_id === userId;
         try {
-          const proofUrl = proof ? await api.uploadPaymentProof(supabase, g.id, me.id, proof) : null;
-          await api.submitPayment(supabase, me.id, proofUrl, paying);
-          dispatch({ type: "applySubmitPay", participantId: me.id, proofUrl, cycles: paying });
+          const proofUrl = proof ? await api.uploadPaymentProof(supabase, g.id, target.id, proof) : null;
+          await api.submitPaymentV2(supabase, [{ participantId: target.id, cycles: paying }], proofUrl);
+          if (isAdmin) {
+            // Admin payments are auto-approved by the RPC — reflect it locally.
+            dispatch({ type: "applyChargesPaid", participantId: target.id, cycles: paying, paid: true, paidBy: userId });
+            dispatch({ type: "applyAdminPay", participantId: target.id, paidNow: paying.includes(currentCycle()) });
+          } else {
+            dispatch({
+              type: "applySubmitPay",
+              participantId: target.id,
+              proofUrl,
+              cycles: paying,
+              proofBy: target.user_id !== userId ? userId : null,
+            });
+          }
         } catch (e) {
           fail(e);
         }
       },
+
+      // One receipt, one transaction: every debt collected by this admin
+      // (possibly spanning several groups) goes into review at once. Each
+      // group keeps its own ledger rows, so accounting stays independent.
+      submitCombinedPay: async (ownerId, proof) => {
+        if (proof) {
+          const err = imageError(proof);
+          if (err) {
+            dispatch({ type: "flash", msg: err });
+            return;
+          }
+        }
+        await syncOfficial(true);
+        const s = ref.current;
+        const bundle = debtsByOwner(s.charges, s.participants, s.groups, userId).find(
+          (b) => b.ownerId === ownerId,
+        );
+        if (!bundle || bundle.items.length === 0) {
+          dispatch({ type: "flash", msg: "No tienes cuotas pendientes con este administrador" });
+          return;
+        }
+        try {
+          // The receipt is uploaded once and shared by every bundled group.
+          const first = bundle.items[0];
+          const proofUrl = proof
+            ? await api.uploadPaymentProof(supabase, first.groupId, first.participantId, proof)
+            : null;
+          const items = bundle.items.map((it) => ({ participantId: it.participantId, cycles: it.cycles }));
+          await api.submitPaymentV2(supabase, items, proofUrl);
+          dispatch({ type: "applyCombinedPay", items, proofUrl });
+        } catch (e) {
+          fail(e);
+        }
+      },
+
+      // Feature: the admin manages the plan without occupying a slot. Creates
+      // or removes their own `is_self` roster row and stamps the group flag.
+      setAdminParticipation: async (participate) => {
+        const g = currentGroup();
+        if (!g || g.owner_id !== userId) return;
+        const roster = ref.current.participants.filter((p) => p.group_id === g.id);
+        const self = roster.find((p) => p.user_id === userId);
+        if (participate === !!self) return;
+        const sort = roster.reduce((m, p) => Math.max(m, p.sort), -1) + 1;
+        try {
+          const participant = await api.setAdminParticipation(
+            supabase,
+            { id: g.id, ownerId: userId },
+            { participate, selfParticipantId: self?.id ?? null, sort },
+          );
+          dispatch({
+            type: "applyAdminParticipation",
+            groupId: g.id,
+            participate,
+            participant,
+            removedId: self?.id ?? null,
+          });
+        } catch (e) {
+          fail(e);
+        }
+      },
+
+      // Archive (soft-delete) exported, already-paid charge rows. The RPC is
+      // all-or-nothing, so a partial batch never happens.
+      deleteExportedCharges: async (ids) => {
+        try {
+          const n = await api.archivePaidCharges(supabase, ids);
+          dispatch({ type: "setCharges", charges: await api.fetchCharges(supabase) });
+          dispatch({ type: "flash", msg: `${n} ${n === 1 ? "registro archivado" : "registros archivados"}` });
+          return true;
+        } catch (e) {
+          fail(e);
+          return false;
+        }
+      },
+
+      setCreateAdminIn: (value) => dispatch({ type: "setCreateAdminIn", value }),
 
       // A prepay covers N months at today's cuota; the receipt is required and
       // reviewed once — afterwards each monthly charge deducts from the balance.
@@ -734,7 +907,8 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
             if (approve) {
               balance = round2(balance + p.prepay_pending);
               const group = ref.current.groups.find((g) => g.id === p.group_id);
-              const cuota = group ? cuotaOf(group) : 0;
+              // The reviewed member's own cuota (may be a custom price).
+              const cuota = group ? getMemberCuota(ref.current, group, p) : 0;
               if (!paid && cuota > 0 && balance >= cuota) {
                 balance = round2(balance - cuota);
                 paid = true;
@@ -768,17 +942,36 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
             return;
           }
           // Regular receipt: it pays the cycles recorded at submission (the
-          // current month, or every owed month when settling arrears).
+          // current month, or every owed month when settling arrears). The
+          // payer on record is whoever submitted the proof (on-behalf) or the
+          // member themself.
           const cycles = p?.pay_cycles?.length ? p.pay_cycles : [currentCycle()];
           const paidNow = approve ? (cycles.includes(currentCycle()) ? true : (p?.paid ?? false)) : false;
+          const paidBy = p?.proof_by ?? p?.user_id ?? null;
           await api.updateParticipantBilling(supabase, participantId, {
             paid: paidNow,
             proof_pending: false,
             pay_cycles: null,
+            proof_by: null,
           });
           if (approve) {
-            await api.setChargesPaid(supabase, participantId, cycles, true);
-            dispatch({ type: "applyChargesPaid", participantId, cycles, paid: true });
+            await api.setChargesPaid(supabase, participantId, cycles, true, paidBy);
+            dispatch({ type: "applyChargesPaid", participantId, cycles, paid: true, paidBy });
+          }
+          // When someone else paid on the member's behalf, tell the member how
+          // the review went (they never saw the submission themselves).
+          if (p?.user_id && p.proof_by && p.proof_by !== p.user_id) {
+            const g = ref.current.groups.find((x) => x.id === p.group_id);
+            await api.insertNotifications(supabase, [
+              {
+                user_id: p.user_id,
+                group_id: p.group_id,
+                title: approve ? `Pago aprobado · ${g?.name ?? "tu grupo"}` : `Pago rechazado · ${g?.name ?? "tu grupo"}`,
+                body: approve
+                  ? `El pago enviado por tu cuota (${cycles.map(cycleLabel).join(", ")}) fue aprobado.`
+                  : "El comprobante enviado por tu cuota fue rechazado · contacta al admin.",
+              },
+            ]);
           }
           dispatch({ type: "applyReview", participantId, paid: paidNow });
         } catch (e) {
@@ -803,6 +996,7 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
             due: `${String(day).padStart(2, "0")}/07`,
             // Only custom groups carry a per-group color; catalog services use their brand color.
             color: s.selService === "others" ? s.createColor : null,
+            adminParticipates: s.createAdminIn,
           });
           dispatch({ type: "applyCreateGroup", group, participants });
         } catch (e) {
@@ -924,11 +1118,40 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
       setMemberPaid: async (participantId, paid) => {
         try {
           await api.reviewParticipant(supabase, participantId, paid);
-          await api.setChargesPaid(supabase, participantId, [currentCycle()], paid);
-          dispatch({ type: "applyChargesPaid", participantId, cycles: [currentCycle()], paid });
+          await api.setChargesPaid(supabase, participantId, [currentCycle()], paid, userId);
+          dispatch({ type: "applyChargesPaid", participantId, cycles: [currentCycle()], paid, paidBy: userId });
           dispatch({ type: "applyMemberPaid", participantId, paid });
         } catch (e) {
           fail(e);
+        }
+      },
+
+      // Admin sets/clears a member's custom price (in the group's currency).
+      // Future charges use it; already-billed months keep their frozen cuota.
+      setMemberPrice: async (participantId, raw) => {
+        const p = ref.current.participants.find((x) => x.id === participantId);
+        if (!p) return false;
+        const clean = raw.trim();
+        let amount: number | null = null;
+        if (clean !== "") {
+          amount = parseFloat(clean);
+          if (!Number.isFinite(amount) || amount <= 0) {
+            dispatch({ type: "flash", msg: "Ingresa un monto mayor a 0 (o deja vacío para la cuota normal)" });
+            return false;
+          }
+          if (amount > 100000) {
+            dispatch({ type: "flash", msg: "El monto es demasiado alto" });
+            return false;
+          }
+        }
+        if (amount === p.custom_amount) return true;
+        try {
+          await api.setParticipantPrice(supabase, participantId, amount);
+          dispatch({ type: "applyMemberPrice", participantId, amount });
+          return true;
+        } catch (e) {
+          fail(e);
+          return false;
         }
       },
 
@@ -1023,34 +1246,39 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
             const notes: { user_id: string; group_id: string; title: string; body: string }[] = [];
             const chargeRows: { group_id: string; participant_id: string; cycle: string; cuota: number; paid: boolean; paid_at: string | null }[] = [];
 
+            // The owner always hears about the run — even without a roster row
+            // (admins may manage a plan without occupying a slot).
+            notes.push({
+              user_id: userId,
+              group_id: g.id,
+              title: `Cobro de ${g.name}`,
+              body: `Se generó el cobro de ${month}: la cuota es ${fmtBs(per)}.`,
+            });
+
             for (const p of roster) {
               // The owner collects (their own row is untouched by the charge).
-              if (p.is_self) {
-                if (p.user_id) {
-                  notes.push({
-                    user_id: p.user_id,
-                    group_id: g.id,
-                    title: `Cobro de ${g.name}`,
-                    body: `Se generó el cobro de ${month}: la cuota es ${fmtBs(per)}.`,
-                  });
-                }
-                continue;
-              }
+              if (p.is_self) continue;
               // Per-participant stamp: never deduct the same cycle twice.
               if (p.billed_cycle === cycle) continue;
 
+              // A member's custom price (in the group's currency) overrides the
+              // split, converted at the same rate and rounding as the group.
+              const cuota =
+                p.custom_amount != null
+                  ? memberCuotaBs(p.custom_amount, g.currency, rate, g.round_cuota)
+                  : per;
               let balance = p.prepaid_balance;
               let paid = false;
               let body: string;
-              if (per > 0 && balance >= per) {
-                balance = round2(balance - per);
+              if (cuota > 0 && balance >= cuota) {
+                balance = round2(balance - cuota);
                 paid = true;
-                body = `Cuota de ${month} (${fmtBs(per)}) cubierta con tu saldo adelantado · te quedan ${fmtBs(balance)}.`;
-                if (balance < per) body += " Recarga para seguir cubierto el próximo mes.";
+                body = `Cuota de ${month} (${fmtBs(cuota)}) cubierta con tu saldo adelantado · te quedan ${fmtBs(balance)}.`;
+                if (balance < cuota) body += " Recarga para seguir cubierto el próximo mes.";
               } else if (balance > 0) {
-                body = `Tu saldo adelantado (${fmtBs(balance)}) no cubre la cuota de ${month} (${fmtBs(per)}). Se guardará como compensación para tu próxima recarga · mientras tanto paga tu cuota del mes.`;
+                body = `Tu saldo adelantado (${fmtBs(balance)}) no cubre la cuota de ${month} (${fmtBs(cuota)}). Se guardará como compensación para tu próxima recarga · mientras tanto paga tu cuota del mes.`;
               } else {
-                body = `Se generó el cobro de ${month}: tu cuota es ${fmtBs(per)}.`;
+                body = `Se generó el cobro de ${month}: tu cuota es ${fmtBs(cuota)}.`;
               }
 
               await api.updateParticipantBilling(supabase, p.id, {
@@ -1064,7 +1292,7 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
                 group_id: g.id,
                 participant_id: p.id,
                 cycle,
-                cuota: per,
+                cuota,
                 paid,
                 paid_at: paid ? new Date().toISOString() : null,
               });

@@ -64,6 +64,24 @@ export function HomeScreen() {
             <div style={{ fontSize: 13, opacity: 0.85, fontWeight: 500 }}>
               {h.dueCount} {h.dueCount === 1 ? "cuota pendiente" : "cuotas pendientes"}
             </div>
+            {/* Combined payment: several groups collected by the same admin */}
+            {h.multiPay && (
+              <div
+                onClick={() => actions.go("paycombined")}
+                style={{
+                  marginTop: 12,
+                  padding: "10px 14px",
+                  borderRadius: 12,
+                  background: "rgba(255,255,255,0.16)",
+                  fontSize: 13,
+                  fontWeight: 700,
+                  textAlign: "center",
+                  cursor: "pointer",
+                }}
+              >
+                Pagar todo junto · {h.multiPayTotal} →
+              </div>
+            )}
           </div>
 
           {/* Prepaid-balance shortcut */}

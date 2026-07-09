@@ -21,6 +21,12 @@ interface MemberRowProps {
   onMoveDown?: () => void;
   /** When provided, renders a remove control on the far right. */
   onRemove?: () => void;
+  /** When provided, renders a tappable cuota chip that opens the price editor. */
+  onEditPrice?: () => void;
+  /** Label for the cuota chip (e.g. "12 Bs"). */
+  priceLabel?: string;
+  /** Highlights the cuota chip when the member has a custom price. */
+  customPrice?: boolean;
 }
 
 const iconBtn = {
@@ -51,6 +57,9 @@ export function MemberRow({
   onMoveUp,
   onMoveDown,
   onRemove,
+  onEditPrice,
+  priceLabel,
+  customPrice,
 }: MemberRowProps) {
   const commit = (value: string) => {
     const clean = value.trim();
@@ -147,6 +156,29 @@ export function MemberRow({
           </div>
         )}
       </div>
+
+      {onEditPrice && (
+        <button
+          type="button"
+          onClick={onEditPrice}
+          title="Cuota personalizada"
+          aria-label={`Editar cuota de ${name}`}
+          style={{
+            border: `1px solid ${customPrice ? "rgba(91,140,255,0.5)" : colors.hairline}`,
+            background: customPrice ? "rgba(91,140,255,0.14)" : "transparent",
+            color: customPrice ? "#7ba6ff" : colors.textMuted,
+            borderRadius: 999,
+            padding: "3px 9px",
+            fontSize: 11,
+            fontWeight: 700,
+            cursor: "pointer",
+            flexShrink: 0,
+            fontFamily: "inherit",
+          }}
+        >
+          {priceLabel}
+        </button>
+      )}
 
       {onTogglePaid ? (
         <button type="button" onClick={onTogglePaid} style={{ border: "none", background: "transparent", padding: 0, cursor: "pointer" }}>

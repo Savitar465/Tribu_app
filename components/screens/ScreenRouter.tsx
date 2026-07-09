@@ -6,6 +6,7 @@ import { GroupScreen } from "./GroupScreen";
 import { AdminScreen } from "./AdminScreen";
 import { CreateScreen } from "./CreateScreen";
 import { PayScreen } from "./PayScreen";
+import { PayCombinedScreen } from "./PayCombinedScreen";
 import { QrScreen } from "./QrScreen";
 import { ApproveScreen } from "./ApproveScreen";
 import { ArrearsScreen } from "./ArrearsScreen";
@@ -23,6 +24,7 @@ const SCREENS: Record<Screen, React.ComponentType> = {
   admin: AdminScreen,
   create: CreateScreen,
   pay: PayScreen,
+  paycombined: PayCombinedScreen,
   qr: QrScreen,
   approve: ApproveScreen,
   arrears: ArrearsScreen,

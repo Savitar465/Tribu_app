@@ -1,8 +1,9 @@
 import { SERVICE_META } from "./data";
 import { fmtBs, fmtUsd, pct } from "./format";
 import { BACK_TITLE } from "./navigation";
+import { advanceCoverage, debtsByOwner, memberCuotaBs } from "./paylogic";
 import type { State } from "./store";
-import type { GroupRow } from "./db/types";
+import type { GroupRow, ParticipantRow } from "./db/types";
 import { STATUS, colors, type StatusKey } from "./theme";
 import type { GroupView } from "./types";
 
@@ -42,6 +43,21 @@ function costOf(group: GroupRow, rate: number) {
   return { totalBs, per, targetBs: per * n, isUsd: group.currency === "USD" };
 }
 
+/** A member's cuota (Bs): their admin-set custom price when they have one —
+ * frozen at this month's charge if already billed, previewed at today's rate
+ * otherwise — or the group's default split. */
+function memberPer(state: State, group: GroupRow, p: ParticipantRow, defaultPer: number): number {
+  if (p.custom_amount == null) return defaultPer;
+  const charge = state.charges.find((c) => c.participant_id === p.id && c.cycle === currentCycle());
+  if (charge) return charge.cuota;
+  return memberCuotaBs(p.custom_amount, group.currency, state.profile.exchange_rate, group.round_cuota);
+}
+
+/** A participant's effective monthly cuota in Bs (custom price or default split). */
+export function getMemberCuota(state: State, group: GroupRow, p: ParticipantRow): number {
+  return memberPer(state, group, p, costOf(group, state.profile.exchange_rate).per);
+}
+
 /** Build the presentational view of a group row. */
 export function buildGroup(state: State, group: GroupRow): GroupView {
   const meta = SERVICE_META[group.service_id];
@@ -51,6 +67,8 @@ export function buildGroup(state: State, group: GroupRow): GroupView {
   // The viewer's own roster row (owner or member) drives their cuota status.
   // Any unpaid charge from a past cycle marks the whole group overdue.
   const myRow = state.participants.find((p) => p.group_id === group.id && p.user_id === state.profile.id);
+  // The viewer's own cuota honors their custom price (default: the group split).
+  const myPer = myRow ? memberPer(state, group, myRow, k.per) : k.per;
   const hasArrears = myRow
     ? state.charges.some((c) => c.participant_id === myRow.id && !c.paid && c.cycle < currentCycle())
     : false;
@@ -78,12 +96,13 @@ export function buildGroup(state: State, group: GroupRow): GroupView {
     due: group.due ?? meta.due,
     owned,
     statusKey,
-    cuota: fmtBs(k.per),
+    cuota: fmtBs(myPer),
     monthly: fmtBs(k.totalBs),
     members: String(group.members_target),
     usdNote: k.isUsd ? `≈ ${fmtUsd(group.amount / group.members_target)}/persona · cobrado en USD` : "",
     isUsd: k.isUsd,
-    perBs: k.per,
+    perBs: myPer,
+    defaultPerBs: k.per,
     totalBs: k.totalBs,
     qrImageUrl: group.qr_image_url,
     paypalInfo: group.paypal_info,
@@ -91,14 +110,22 @@ export function buildGroup(state: State, group: GroupRow): GroupView {
   };
 
   if (owned) {
-    const paid = participantsOf(state, group.id).filter((p) => p.paid).length;
-    const collected = paid * k.per;
+    // Collection figures honor per-member custom prices: the target is the sum
+    // of each roster member's cuota plus the default split for unfilled slots.
+    const roster = participantsOf(state, group.id);
+    const paid = roster.filter((p) => p.paid).length;
+    const collected = roster.filter((p) => p.paid).reduce((a, p) => a + memberPer(state, group, p, k.per), 0);
+    const targetBs =
+      roster.reduce((a, p) => a + memberPer(state, group, p, k.per), 0) +
+      k.per * Math.max(0, group.members_target - roster.length);
     view.admin = {
       collected: fmtBs(collected),
-      pending: fmtBs(k.targetBs - collected),
-      total: fmtBs(k.targetBs),
-      pct: pct(collected, k.targetBs),
+      pending: fmtBs(targetBs - collected),
+      total: fmtBs(targetBs),
+      pct: pct(collected, targetBs),
       pendingCount: String(group.members_target - paid),
+      collectedBs: collected,
+      targetBs,
     };
   }
   return view;
@@ -142,12 +169,16 @@ export function getHome(state: State) {
   const due = groups
     .filter((g) => g.statusKey === "pending" || g.statusKey === "overdue")
     .reduce((a, g) => a + g.perBs, 0);
+  const combined = getCombinedPay(state);
   return {
     ...getProfileView(state),
     groups,
     hasGroups: groups.length > 0,
     payDue: fmtBs(due),
     dueCount: groups.filter((g) => g.statusKey === "pending" || g.statusKey === "overdue").length,
+    /** Combined-payment entry: some admin collects debts across several groups. */
+    multiPay: combined.hasMultiGroup,
+    multiPayTotal: combined.totalLabel,
     prepaidTotal: fmtBs(
       state.participants
         .filter((p) => p.user_id === state.profile.id)
@@ -159,15 +190,24 @@ export function getHome(state: State) {
 /** Members of the current group (for the roster list). */
 export function getMembers(state: State, accent: string) {
   const g = getCurrentGroup(state);
-  if (!g) return [];
+  const row = g ? state.groups.find((x) => x.id === g.id) : undefined;
+  if (!g || !row) return [];
   return participantsOf(state, g.id).map((m) => ({
     id: m.id,
     isSelf: m.is_self,
     name: m.name,
-    sub: [m.email, m.prepaid_balance > 0 ? `Saldo: ${fmtBs(m.prepaid_balance)}` : ""]
+    sub: [
+      m.email,
+      m.prepaid_balance > 0 ? `Saldo: ${fmtBs(m.prepaid_balance)}` : "",
+      m.custom_amount != null ? `Cuota propia: ${fmtBs(memberPer(state, row, m, g.defaultPerBs))}` : "",
+    ]
       .filter(Boolean)
       .join(" · "),
     av: m.is_self ? accent : m.color,
+    /** Admin-set price override in the group's currency (null = default split). */
+    customAmount: m.custom_amount,
+    /** The member's effective monthly cuota, formatted. */
+    cuotaLabel: fmtBs(memberPer(state, row, m, g.defaultPerBs)),
     paid: m.paid,
     stLabel: m.paid ? "Pagado" : m.proof_pending ? "En revisión" : "Pendiente",
     stColor: m.paid ? "#36d07a" : m.proof_pending ? "#7ba6ff" : "#f5b53d",
@@ -181,17 +221,29 @@ export function getApprovals(state: State) {
   if (!g) return [];
   return participantsOf(state, g.id)
     .filter((x) => x.proof_pending)
-    .map((p) => ({
+    .map((p) => {
+      // Declared amount: the sum of the cycles being paid at each month's
+      // frozen price (falls back to the current cuota for cycle-less proofs).
+      const cycles = p.pay_cycles ?? [];
+      const covered = state.charges.filter(
+        (c) => c.participant_id === p.id && cycles.includes(c.cycle),
+      );
+      return {
       id: p.id,
       name: p.name,
       groupName: g.name,
-      cuota: g.cuota,
+      cuota: covered.length > 0 ? fmtBs(covered.reduce((a, c) => a + c.cuota, 0)) : g.cuota,
       plan: g.plan,
       proofUrl: p.proof_url,
+      /** Months the receipt is paying (empty = the current month). */
+      payCycles: cycles,
+      /** Who submitted the proof when it wasn't the member themself. */
+      payerName: p.proof_by && p.proof_by !== p.user_id ? payerLabel(state, g.id, p.proof_by) : null,
       /** Set when the submission is a prepay (amount in Bs + months declared). */
       prepayAmount: p.prepay_pending,
       prepayMonths: p.prepay_months,
-    }));
+      };
+    });
 }
 
 /** The next pending proof (if any) awaiting review in the current group. */
@@ -217,9 +269,8 @@ export function getDashboard(state: State) {
   let adminTotal = 0;
   for (const g of groups) {
     if (!g.owned || !g.admin) continue;
-    const paid = participantsOf(state, g.id).filter((p) => p.paid).length;
-    adminCollected += paid * g.perBs;
-    adminTotal += g.totalBs;
+    adminCollected += g.admin.collectedBs;
+    adminTotal += g.admin.targetBs;
   }
 
   return {
@@ -237,13 +288,12 @@ export function getDashboard(state: State) {
   };
 }
 
-/** The signed-in user's unpaid charges in a group (arrears + current month). */
-export function getMyArrears(state: State, groupId: string) {
-  const me = state.participants.find((p) => p.group_id === groupId && p.user_id === state.profile.id);
+/** A participant's unpaid charges in a group (arrears + current month). */
+export function getParticipantArrears(state: State, participantId: string | null) {
   const cur = currentCycle();
-  const items = me
+  const items = participantId
     ? state.charges
-        .filter((c) => c.participant_id === me.id && !c.paid)
+        .filter((c) => c.participant_id === participantId && !c.paid)
         .sort((a, b) => a.cycle.localeCompare(b.cycle))
         .map((c) => ({
           cycle: c.cycle,
@@ -262,6 +312,188 @@ export function getMyArrears(state: State, groupId: string) {
     hasPast: items.some((i) => !i.isCurrent),
     total,
     totalLabel: fmtBs(total),
+  };
+}
+
+/** The signed-in user's unpaid charges in a group (arrears + current month). */
+export function getMyArrears(state: State, groupId: string) {
+  const me = state.participants.find((p) => p.group_id === groupId && p.user_id === state.profile.id);
+  return getParticipantArrears(state, me?.id ?? null);
+}
+
+/** Roster members of the current group the signed-in user can pay for (anyone
+ * but themself with owed months and no proof already in review). */
+export function getPayTargets(state: State) {
+  const g = getCurrentGroup(state);
+  if (!g) return [];
+  return participantsOf(state, g.id)
+    .filter((p) => p.user_id !== state.profile.id && !p.proof_pending)
+    .map((p) => ({ id: p.id, name: p.name, color: p.color, arrears: getParticipantArrears(state, p.id) }))
+    .filter((p) => p.arrears.count > 0);
+}
+
+/** Display name for the user who made a payment (resolved from the group's
+ * roster, falling back to a generic label). Null when unknown/own payment. */
+export function payerLabel(state: State, groupId: string, payerId: string | null) {
+  if (!payerId) return null;
+  if (payerId === state.profile.id) return "ti";
+  const p = state.participants.find((x) => x.group_id === groupId && x.user_id === payerId);
+  return p?.name ?? "otro miembro";
+}
+
+/** Everything the user owes, bundled per administrator — for the combined
+ * multi-group payment screen. */
+export function getCombinedPay(state: State) {
+  const bundles = debtsByOwner(state.charges, state.participants, state.groups, state.profile.id).map((b) => {
+    const views = new Map(state.groups.map((g) => [g.id, buildGroup(state, g)]));
+    return {
+      ...b,
+      totalLabel: fmtBs(b.total),
+      items: b.items.map((it) => {
+        const v = views.get(it.groupId);
+        return {
+          ...it,
+          mono: v?.mono ?? "?",
+          color: v?.color ?? colors.info,
+          name: v?.name ?? it.groupName,
+          totalLabel: fmtBs(it.total),
+          monthsLabel: it.cycles.map(cycleShort).join(", "),
+        };
+      }),
+    };
+  });
+  const total = bundles.reduce((a, b) => a + b.total, 0);
+  return {
+    bundles,
+    total,
+    totalLabel: fmtBs(total),
+    /** True when some admin collects the user's debts across several groups. */
+    hasMultiGroup: bundles.some((b) => b.groupCount > 1),
+  };
+}
+
+/** Upcoming months an advance payment would cover for the signed-in user in a
+ * group (used by the Pay screen's prepay preview). */
+export function getAdvancePreview(state: State, groupId: string, months: number) {
+  const me = state.participants.find((p) => p.group_id === groupId && p.user_id === state.profile.id);
+  const paidCycles = me
+    ? state.charges.filter((c) => c.participant_id === me.id && c.paid).map((c) => c.cycle)
+    : [];
+  // A member marked paid without a charge row (e.g. just-created group) still
+  // has this month covered — count it as settled for the preview.
+  if (me?.paid && !paidCycles.includes(currentCycle())) paidCycles.push(currentCycle());
+  const covered = advanceCoverage(paidCycles, currentCycle(), months);
+  return { covered, coveredLabel: covered.map(cycleLabel).join(", ") };
+}
+
+/** Overdue-management filters (null = all). Member is keyed by display name so
+ * the same person aggregates across the admin's groups. */
+export interface OverdueFilters {
+  groupId: string | null;
+  cycle: string | null;
+  member: string | null;
+}
+
+/** Cross-group overdue management for the groups the user administers: per
+ * month, who paid and who still owes (with amounts), plus filter options and
+ * totals for the current selection. */
+export function getOverdue(state: State, filters: OverdueFilters) {
+  const owned = state.groups.filter((g) => g.owner_id === state.profile.id);
+  const views = new Map(owned.map((g) => [g.id, buildGroup(state, g)]));
+  const roster = new Map(
+    state.participants.filter((p) => views.has(p.group_id)).map((p) => [p.id, p]),
+  );
+
+  const all = state.charges.filter((c) => views.has(c.group_id) && roster.has(c.participant_id));
+
+  // Filter options are derived from the unfiltered set so pickers stay stable.
+  const groupOptions = owned.map((g) => ({ id: g.id, name: views.get(g.id)!.name }));
+  const cycleOptions = [...new Set(all.map((c) => c.cycle))].sort().reverse();
+  const memberOptions = [...new Set(all.map((c) => roster.get(c.participant_id)!.name))].sort((a, b) =>
+    a.localeCompare(b),
+  );
+
+  const rows = all.filter(
+    (c) =>
+      (!filters.groupId || c.group_id === filters.groupId) &&
+      (!filters.cycle || c.cycle === filters.cycle) &&
+      (!filters.member || roster.get(c.participant_id)!.name === filters.member),
+  );
+
+  const cur = currentCycle();
+  const byMonth = new Map<
+    string,
+    {
+      cycle: string;
+      label: string;
+      isCurrent: boolean;
+      paid: { id: string; participantId: string; name: string; color: string; groupName: string; cuotaLabel: string; payer: string | null }[];
+      owing: { id: string; participantId: string; userId: string | null; name: string; color: string; groupName: string; cuota: number; cuotaLabel: string; overdue: boolean }[];
+      owedTotal: number;
+    }
+  >();
+
+  for (const c of rows) {
+    const p = roster.get(c.participant_id)!;
+    const v = views.get(c.group_id)!;
+    const m = byMonth.get(c.cycle) ?? {
+      cycle: c.cycle,
+      label: cycleLabel(c.cycle),
+      isCurrent: c.cycle === cur,
+      paid: [],
+      owing: [],
+      owedTotal: 0,
+    };
+    if (c.paid) {
+      m.paid.push({
+        id: c.id,
+        participantId: p.id,
+        name: p.name,
+        color: p.color,
+        groupName: v.name,
+        cuotaLabel: fmtBs(c.cuota),
+        payer: c.paid_by && c.paid_by !== p.user_id ? payerLabel(state, c.group_id, c.paid_by) : null,
+      });
+    } else {
+      m.owing.push({
+        id: c.id,
+        participantId: p.id,
+        userId: p.user_id,
+        name: p.name,
+        color: p.color,
+        groupName: v.name,
+        cuota: c.cuota,
+        cuotaLabel: fmtBs(c.cuota),
+        overdue: c.cycle < cur,
+      });
+      m.owedTotal += c.cuota;
+    }
+    byMonth.set(c.cycle, m);
+  }
+
+  const months = [...byMonth.values()]
+    .sort((a, b) => b.cycle.localeCompare(a.cycle))
+    .map((m) => ({
+      ...m,
+      owedLabel: fmtBs(m.owedTotal),
+      complete: m.owing.length === 0,
+      paidCount: m.paid.length,
+      totalCount: m.paid.length + m.owing.length,
+    }));
+
+  const charged = rows.reduce((a, c) => a + c.cuota, 0);
+  const collected = rows.filter((c) => c.paid).reduce((a, c) => a + c.cuota, 0);
+  return {
+    months,
+    groupOptions,
+    cycleOptions,
+    memberOptions,
+    totals: {
+      charged: fmtBs(charged),
+      collected: fmtBs(collected),
+      pending: fmtBs(charged - collected),
+      pendingCount: rows.filter((c) => !c.paid).length,
+    },
   };
 }
 
@@ -523,14 +755,16 @@ export function getHistory(state: State) {
     .map(([cycle, rows]) => {
       const cuota = rows[0].cuota;
       const paidRows = rows.filter((r) => r.paid);
-      const target = cuota * rows.length;
-      const collected = cuota * paidRows.length;
+      // Sum per row: members may have custom prices, so cuotas can differ.
+      const target = rows.reduce((a, r) => a + r.cuota, 0);
+      const collected = paidRows.reduce((a, r) => a + r.cuota, 0);
+      const uniform = rows.every((r) => r.cuota === cuota);
       return {
         cycle,
         monthShort: cycleShort(cycle),
         label: cycleLabel(cycle),
         cuota,
-        cuotaLabel: fmtBs(cuota),
+        cuotaLabel: uniform ? fmtBs(cuota) : "varias",
         target,
         collected,
         collectedLabel: fmtBs(collected),
@@ -541,7 +775,14 @@ export function getHistory(state: State) {
         detail: rows
           .map((r) => {
             const p = roster.get(r.participant_id)!;
-            return { id: p.id, name: p.name, color: p.color, paid: r.paid };
+            return {
+              id: p.id,
+              name: p.name,
+              color: p.color,
+              paid: r.paid,
+              /** Who paid, when it wasn't the member themself. */
+              payer: r.paid_by && r.paid_by !== p.user_id ? payerLabel(state, g.id, r.paid_by) : null,
+            };
           })
           .sort((a, b) => Number(a.paid) - Number(b.paid)),
       };
@@ -558,6 +799,35 @@ export function getHistory(state: State) {
     pendingLabel: fmtBs(totalPending),
     caption: g.owned ? "cobros por mes" : "tus cuotas por mes",
     totalCaption: g.owned ? "Total cobrado" : "Total pagado",
+  };
+}
+
+/** Denormalized export of the current group's charge ledger (admin only):
+ * rows for the CSV plus the ids of paid rows, which are the only ones that
+ * may be archived after exporting. */
+export function getChargesExport(state: State) {
+  const g = getCurrentGroup(state);
+  if (!g || !g.owned) return null;
+  const roster = new Map(participantsOf(state, g.id).map((p) => [p.id, p]));
+  const charges = state.charges
+    .filter((c) => c.group_id === g.id && roster.has(c.participant_id))
+    .sort((a, b) => a.cycle.localeCompare(b.cycle));
+  return {
+    fileName: `${(g.name || "grupo").replace(/[^\p{L}\p{N}]+/gu, "-").toLowerCase()}-pagos.csv`,
+    rows: charges.map((c) => {
+      const p = roster.get(c.participant_id)!;
+      return {
+        group: g.name,
+        cycle: c.cycle,
+        member: p.name,
+        cuota: c.cuota,
+        paid: c.paid,
+        paidAt: c.paid_at,
+        paidBy: c.paid_by && c.paid_by !== p.user_id ? payerLabel(state, g.id, c.paid_by) : null,
+      };
+    }),
+    paidIds: charges.filter((c) => c.paid).map((c) => c.id),
+    count: charges.length,
   };
 }
 

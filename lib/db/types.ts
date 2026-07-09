@@ -40,6 +40,8 @@ export interface GroupRow {
   paypal_info: string | null;
   /** Free-text account details (e.g. UglyCash / bank transfer); null when unset. */
   bank_info: string | null;
+  /** False when the admin manages the plan without occupying a slot (no self row). */
+  admin_participates: boolean;
   created_at: string;
 }
 
@@ -79,6 +81,10 @@ export interface ParticipantRow {
   billed_cycle: string | null;
   /** Cycles (yyyy-mm) a submitted receipt is paying; null when none pending. */
   pay_cycles: string[] | null;
+  /** User who submitted the pending proof (null = the member themself). */
+  proof_by: string | null;
+  /** Admin-set price override in the group's currency (null = default split). */
+  custom_amount: number | null;
 }
 
 /** One month's charge for one participant (cuota frozen at that month's rate). */
@@ -92,6 +98,10 @@ export interface ChargeRow {
   paid_at: string | null;
   /** Last automatic reminder tier sent (0 none, 1 at 3 days, 2 at 7 days). */
   reminder_level: number;
+  /** User whose payment settled the charge (null = system/prepaid/legacy). */
+  paid_by: string | null;
+  /** Soft-delete stamp set when the admin archives exported rows; null = live. */
+  deleted_at: string | null;
   created_at: string;
 }
 

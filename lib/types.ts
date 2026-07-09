@@ -40,6 +40,7 @@ export type Screen =
   | "admin"
   | "create"
   | "pay"
+  | "paycombined"
   | "qr"
   | "approve"
   | "arrears"
@@ -69,7 +70,10 @@ export interface GroupView {
   members: string;
   usdNote: string;
   isUsd: boolean;
+  /** The viewer's own cuota (Bs) — honors their custom price when set. */
   perBs: number;
+  /** The group's default per-member split (Bs), ignoring custom prices. */
+  defaultPerBs: number;
   totalBs: number;
   /** Public URL of the admin's payment QR image (null when not uploaded). */
   qrImageUrl: string | null;
@@ -84,5 +88,8 @@ export interface GroupView {
     total: string;
     pct: string;
     pendingCount: string;
+    /** Numeric collection figures (for cross-group aggregation). */
+    collectedBs: number;
+    targetBs: number;
   };
 }

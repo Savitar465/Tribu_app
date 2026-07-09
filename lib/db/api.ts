@@ -31,7 +31,7 @@ export async function fetchAppData(supabase: SupabaseClient, userId: string): Pr
     supabase.from("groups").select("*").order("created_at", { ascending: true }),
     supabase.from("group_participants").select("*").order("sort", { ascending: true }),
     supabase.from("group_payments").select("*").order("sort", { ascending: true }),
-    supabase.from("participant_charges").select("*").order("cycle", { ascending: true }),
+    supabase.from("participant_charges").select("*").is("deleted_at", null).order("cycle", { ascending: true }),
     supabase.from("wallets").select("*").eq("user_id", userId).single(),
     supabase.from("wallet_transactions").select("*").order("created_at", { ascending: false }),
     supabase.from("notifications").select("*").order("created_at", { ascending: false }).limit(50),
@@ -49,11 +49,12 @@ export async function fetchAppData(supabase: SupabaseClient, userId: string): Pr
   };
 }
 
-/** All charge rows visible to the user (refreshed after a billing run). */
+/** All live (non-archived) charge rows visible to the user (refreshed after a billing run). */
 export async function fetchCharges(supabase: SupabaseClient): Promise<ChargeRow[]> {
   const { data, error } = await supabase
     .from("participant_charges")
     .select("*")
+    .is("deleted_at", null)
     .order("cycle", { ascending: true });
   return must<ChargeRow[]>(data, error, "fetchCharges");
 }
@@ -70,20 +71,60 @@ export async function insertCharges(
   if (error) throw new Error(`insertCharges: ${error.message}`);
 }
 
-/** Mark a participant's charges for the given cycles as paid/unpaid. */
+/** Mark a participant's charges for the given cycles as paid/unpaid.
+ * `paidBy` records who made the payment (kept null when unpaying). */
 export async function setChargesPaid(
   supabase: SupabaseClient,
   participantId: string,
   cycles: string[],
   paid: boolean,
+  paidBy: string | null = null,
 ): Promise<void> {
   if (cycles.length === 0) return;
   const { error } = await supabase
     .from("participant_charges")
-    .update({ paid, paid_at: paid ? new Date().toISOString() : null })
+    .update({ paid, paid_at: paid ? new Date().toISOString() : null, paid_by: paid ? paidBy : null })
     .eq("participant_id", participantId)
     .in("cycle", cycles);
   if (error) throw new Error(`setChargesPaid: ${error.message}`);
+}
+
+/** One payment item: a participant's months being paid together. */
+export interface PaymentItem {
+  participantId: string;
+  cycles: string[];
+}
+
+/**
+ * Submit a payment atomically via the `submit_payment_v2` RPC — one or many
+ * participants, possibly across groups (combined payment) or on behalf of a
+ * fellow member. When the caller administers a group, its items are approved
+ * immediately (no receipt); otherwise they go into review.
+ * Returns how many items were auto-approved vs. left pending.
+ */
+export async function submitPaymentV2(
+  supabase: SupabaseClient,
+  items: PaymentItem[],
+  proofUrl: string | null,
+): Promise<{ approved: number; pending: number }> {
+  const { data, error } = await supabase.rpc("submit_payment_v2", {
+    p_items: items.map((i) => ({ participant_id: i.participantId, cycles: i.cycles })),
+    p_proof_url: proofUrl,
+  });
+  if (error) throw new Error(`submitPaymentV2: ${error.message}`);
+  return { approved: data?.approved ?? 0, pending: data?.pending ?? 0 };
+}
+
+/**
+ * Soft-delete exported charge rows via the `archive_paid_charges` RPC.
+ * Admin-only and paid-rows-only; the whole batch succeeds or nothing is
+ * archived. Returns the number of archived rows.
+ */
+export async function archivePaidCharges(supabase: SupabaseClient, ids: string[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  const { data, error } = await supabase.rpc("archive_paid_charges", { p_ids: ids });
+  if (error) throw new Error(`archivePaidCharges: ${error.message}`);
+  return data ?? 0;
 }
 
 /** The signed-in user's notification feed (newest first). */
@@ -255,23 +296,6 @@ export async function saveOfficialRate(
   if (error) throw new Error(`saveOfficialRate: ${error.message}`);
 }
 
-/** Move the user's own roster row into "review" after submitting a proof.
- * `cycles` records which months the receipt pays (current month, or all
- * owed). `paid` is untouched — only the admin flips it on approval (the
- * member-update guard forbids members changing it). */
-export async function submitPayment(
-  supabase: SupabaseClient,
-  participantId: string,
-  proofUrl: string | null,
-  cycles: string[],
-): Promise<void> {
-  const { error } = await supabase
-    .from("group_participants")
-    .update({ proof_pending: true, proof_url: proofUrl, pay_cycles: cycles })
-    .eq("id", participantId);
-  if (error) throw new Error(`submitPayment: ${error.message}`);
-}
-
 /** Submit a prepay (N months in advance) for admin approval. */
 export async function submitPrepay(
   supabase: SupabaseClient,
@@ -302,10 +326,25 @@ export async function updateParticipantBilling(
     prepay_months?: number | null;
     billed_cycle?: string;
     pay_cycles?: string[] | null;
+    proof_by?: string | null;
   },
 ): Promise<void> {
   const { error } = await supabase.from("group_participants").update(patch).eq("id", participantId);
   if (error) throw new Error(`updateParticipantBilling: ${error.message}`);
+}
+
+/** Set (or clear with null) a member's custom monthly price, in the group's
+ * currency. Admin-only via RLS + the member-update guard. */
+export async function setParticipantPrice(
+  supabase: SupabaseClient,
+  participantId: string,
+  amount: number | null,
+): Promise<void> {
+  const { error } = await supabase
+    .from("group_participants")
+    .update({ custom_amount: amount })
+    .eq("id", participantId);
+  if (error) throw new Error(`setParticipantPrice: ${error.message}`);
 }
 
 /** Approve or reject a participant's proof. */
@@ -334,6 +373,8 @@ export async function createGroup(
     billingDay: number;
     due: string;
     color: string | null;
+    /** False → the admin manages the plan without occupying a slot (no self row). */
+    adminParticipates: boolean;
   },
 ): Promise<{ group: GroupRow; participants: ParticipantRow[] }> {
   const insertGroup = await supabase
@@ -350,10 +391,13 @@ export async function createGroup(
       self_status: "paid",
       due: values.due,
       color: values.color,
+      admin_participates: values.adminParticipates,
     })
     .select("*")
     .single();
   const group = must<GroupRow>(insertGroup.data, insertGroup.error, "createGroup(group)");
+
+  if (!values.adminParticipates) return { group, participants: [] };
 
   const insertSelf = await supabase
     .from("group_participants")
@@ -363,6 +407,36 @@ export async function createGroup(
   const self = must<ParticipantRow>(insertSelf.data, insertSelf.error, "createGroup(self)");
 
   return { group, participants: [self] };
+}
+
+/** Flip whether the admin occupies a slot: creates or removes their own
+ * `is_self` roster row and stamps the flag on the group. Returns the created
+ * row when joining (null when leaving). */
+export async function setAdminParticipation(
+  supabase: SupabaseClient,
+  group: { id: string; ownerId: string },
+  values: { participate: boolean; selfParticipantId: string | null; sort: number },
+): Promise<ParticipantRow | null> {
+  const flagged = await supabase
+    .from("groups")
+    .update({ admin_participates: values.participate })
+    .eq("id", group.id);
+  if (flagged.error) throw new Error(`setAdminParticipation(flag): ${flagged.error.message}`);
+
+  if (values.participate) {
+    const inserted = await supabase
+      .from("group_participants")
+      .insert({ group_id: group.id, name: "Tú", color: "#5b8cff", paid: true, is_self: true, sort: values.sort, user_id: group.ownerId })
+      .select("*")
+      .single();
+    return must<ParticipantRow>(inserted.data, inserted.error, "setAdminParticipation(join)");
+  }
+
+  if (values.selfParticipantId) {
+    const removed = await supabase.from("group_participants").delete().eq("id", values.selfParticipantId);
+    if (removed.error) throw new Error(`setAdminParticipation(leave): ${removed.error.message}`);
+  }
+  return null;
 }
 
 /** Add a person to a group's roster. RLS lets the group owner insert freely. */

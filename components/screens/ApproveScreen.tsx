@@ -4,7 +4,7 @@ import { Card } from "@/components/ui/Card";
 import { ImageIcon } from "@/components/ui/Icons";
 import { initials } from "@/components/ui/Avatar";
 import { fmtBs } from "@/lib/format";
-import { getApproval, getApprovals } from "@/lib/selectors";
+import { cycleShort, getApproval, getApprovals } from "@/lib/selectors";
 import { useApp } from "@/lib/store";
 import { colors } from "@/lib/theme";
 
@@ -38,8 +38,17 @@ export function ApproveScreen() {
           <div style={{ fontSize: 16, fontWeight: 700, color: colors.textPrimary }}>{approval.name}</div>
           <div style={{ fontSize: 12.5, color: colors.textMuted }}>
             {approval.groupName} ·{" "}
-            {approval.prepayAmount != null ? `pago adelantado · ${approval.prepayMonths} meses` : "cuota junio"}
+            {approval.prepayAmount != null
+              ? `pago adelantado · ${approval.prepayMonths} meses`
+              : approval.payCycles.length > 0
+                ? `cuota ${approval.payCycles.map(cycleShort).join(", ")}`
+                : "cuota del mes"}
           </div>
+          {approval.payerName && (
+            <div style={{ fontSize: 12, fontWeight: 700, color: colors.info, marginTop: 2 }}>
+              Enviado por {approval.payerName} en nombre de {approval.name}
+            </div>
+          )}
         </div>
         {queue > 1 && (
           <span

@@ -6,11 +6,20 @@ import { ChevronRight, CreditCardIcon, GlobeIcon, QrIcon, UploadIcon } from "@/c
 import { IconBadge } from "@/components/ui/IconBadge";
 import { SectionLabel } from "@/components/ui/SectionLabel";
 import { fmtBs } from "@/lib/format";
-import { getCurrentGroup, getMyArrears, getMyPrepaid } from "@/lib/selectors";
+import {
+  getAdvancePreview,
+  getCurrentGroup,
+  getMyArrears,
+  getMyPrepaid,
+  getParticipantArrears,
+  getPayTargets,
+} from "@/lib/selectors";
 import { useApp } from "@/lib/store";
 import { colors } from "@/lib/theme";
 
-/** Pay: pick how many months to cover (1 = this month, more = prepay), a method and the receipt. */
+/** Pay: pick who the payment is for (yourself or a fellow member), how many
+ * months to cover (1 = this month, more = prepay), a method and the receipt.
+ * Group admins register payments directly — no receipt, no review. */
 export function PayScreen() {
   const { state, actions } = useApp();
   const group = getCurrentGroup(state);
@@ -22,21 +31,35 @@ export function PayScreen() {
   const [sending, setSending] = useState(false);
   const [months, setMonths] = useState(1);
   const [payArrears, setPayArrears] = useState(false);
+  /** Roster row this payment is for (null = the signed-in user). */
+  const [forId, setForId] = useState<string | null>(null);
 
-  const arrears = group ? getMyArrears(state, group.id) : null;
+  // Members (and admins) can pay on behalf of a fellow member with owed months.
+  const targets = getPayTargets(state);
+  const forMember = targets.find((t) => t.id === forId) ?? null;
+  const isAdmin = group?.owned ?? false;
+
+  const arrears = group
+    ? forMember
+      ? getParticipantArrears(state, forMember.id)
+      : getMyArrears(state, group.id)
+    : null;
   const settleAll = payArrears && arrears !== null && arrears.count > 0;
   // With debt, a simple payment goes to the oldest owed month (at that
   // month's price) and prepaying is disabled until the member is current.
   const oldest = !settleAll && arrears && arrears.hasPast ? arrears.items[0] : null;
-  // Current month already paid → any submission is a prepay of coming months.
-  const currentPaid = !oldest && arrears !== null && arrears.count === 0 && group?.statusKey === "paid";
-  const isPrepay = !settleAll && !oldest && (months > 1 || currentPaid);
+  // Current month already paid → any submission is a prepay of coming months
+  // (only when paying one's own cuota).
+  const currentPaid =
+    !forMember && !oldest && arrears !== null && arrears.count === 0 && group?.statusKey === "paid";
+  const isPrepay = !forMember && !settleAll && !oldest && (months > 1 || currentPaid);
+  const coverage = group && isPrepay ? getAdvancePreview(state, group.id, months) : null;
   const total = settleAll
     ? arrears.totalLabel
     : oldest
       ? oldest.cuotaLabel
       : group
-        ? fmtBs(Math.round(group.perBs * months * 100) / 100)
+        ? fmtBs(Math.round(group.perBs * (isPrepay ? months : 1) * 100) / 100)
         : "—";
 
   const pick = (file: File | null) => {
@@ -57,9 +80,9 @@ export function PayScreen() {
 
   const send = async () => {
     setSending(true);
-    if (settleAll) await actions.submitPay(proof, arrears.cycles);
+    if (settleAll) await actions.submitPay(proof, arrears.cycles, forId);
     else if (isPrepay) await actions.submitPrepay(months, proof);
-    else await actions.submitPay(proof);
+    else await actions.submitPay(proof, undefined, forId);
     setSending(false);
   };
 
@@ -85,8 +108,47 @@ export function PayScreen() {
               : isPrepay
                 ? `${months} ${months === 1 ? "mes" : "meses"} por adelantado`
                 : "cuota del mes"}
+          {forMember ? ` · para ${forMember.name}` : ""}
         </div>
       </Card>
+
+      {/* Who is this payment for? (yourself, or a member with owed months) */}
+      {targets.length > 0 && (
+        <Card padding="13px 16px" radius={16} style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 700, color: colors.textPrimary, marginBottom: 8 }}>
+            ¿Para quién es este pago?
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <PayeeChip
+              label={isAdmin ? "Mi ficha" : "Mi cuota"}
+              active={forId === null}
+              onClick={() => {
+                setForId(null);
+                setPayArrears(false);
+              }}
+            />
+            {targets.map((t) => (
+              <PayeeChip
+                key={t.id}
+                label={`${t.name} · debe ${t.arrears.totalLabel}`}
+                active={forId === t.id}
+                onClick={() => {
+                  setForId(t.id);
+                  setPayArrears(false);
+                  setMonths(1);
+                }}
+              />
+            ))}
+          </div>
+          {forMember && (
+            <div style={{ fontSize: 11.5, color: colors.textMuted, marginTop: 8 }}>
+              {isAdmin
+                ? "Como administrador, el pago se registra y aprueba al instante."
+                : `El pago quedará registrado a nombre de ${forMember.name}, indicando que tú lo enviaste.`}
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* Owed months (each at the price charged that month) */}
       {arrears && arrears.hasPast && (
@@ -96,7 +158,7 @@ export function PayScreen() {
           style={{ marginBottom: 12, border: "1px solid rgba(245,181,61,0.3)" }}
         >
           <div style={{ fontSize: 13.5, fontWeight: 700, color: colors.warning, marginBottom: 8 }}>
-            Tienes cuotas atrasadas
+            {forMember ? `${forMember.name} tiene cuotas atrasadas` : "Tienes cuotas atrasadas"}
           </div>
           {arrears.items.map((it) => (
             <div
@@ -139,8 +201,9 @@ export function PayScreen() {
         </Card>
       )}
 
-      {/* Months to cover (1 = this month, more = prepay) — hidden while owing */}
-      {!settleAll && !oldest && (
+      {/* Months to cover (1 = this month, more = prepay) — hidden while owing
+          or when paying on behalf of someone else */}
+      {!settleAll && !oldest && !forMember && (
       <Card padding="12px 14px" radius={16} style={{ marginBottom: 12 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ flex: 1 }}>
@@ -165,23 +228,29 @@ export function PayScreen() {
         </div>
         {isPrepay && (
           <div style={{ fontSize: 11.5, color: colors.textMuted, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${colors.hairlineSoft}` }}>
+            {coverage && coverage.covered.length > 0 && (
+              <div style={{ fontWeight: 700, color: colors.textSecondary, marginBottom: 6 }}>
+                Cubre: {coverage.coveredLabel}
+              </div>
+            )}
             Si la cuota varía por el tipo de cambio, tu saldo compensa la diferencia: lo que sobra de
             un mes pasa al siguiente y las cuotas se descuentan automáticamente (sin aprobar
-            comprobantes cada mes) hasta agotar el saldo.
+            comprobantes cada mes) hasta agotar el saldo. No recibirás recordatorios de pago mientras
+            tu saldo cubra la cuota.
           </div>
         )}
       </Card>
       )}
 
-      {/* Prepaid status */}
-      {prepaid && prepaid.pendingAmount != null && (
+      {/* Prepaid status (own cuota only) */}
+      {prepaid && !forMember && prepaid.pendingAmount != null && (
         <Card padding="13px 16px" radius={16} style={{ marginBottom: 12, border: "1px solid rgba(123,166,255,0.3)" }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: colors.info }}>
             Tienes una recarga de {prepaid.pendingMonths} meses en revisión ({fmtBs(prepaid.pendingAmount)})
           </div>
         </Card>
       )}
-      {prepaid && prepaid.balance > 0 && (
+      {prepaid && !forMember && prepaid.balance > 0 && (
         <Card padding="13px 16px" radius={16} style={{ marginBottom: 12, border: "1px solid rgba(54,208,122,0.25)" }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: colors.positive }}>
             Saldo adelantado en este grupo: {prepaid.balanceLabel}
@@ -267,6 +336,18 @@ export function PayScreen() {
 
       </div>
 
+      {/* Admins register payments directly — no receipt, no review round-trip. */}
+      {isAdmin ? (
+        <Card padding="13px 16px" radius={16} style={{ marginBottom: 22, border: "1px solid rgba(54,208,122,0.25)" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: colors.positive }}>
+            Eres el administrador de este grupo
+          </div>
+          <div style={{ fontSize: 11.5, color: colors.textMuted, marginTop: 2 }}>
+            No necesitas subir comprobante: el pago se registra y aprueba automáticamente.
+          </div>
+        </Card>
+      ) : (
+        <>
       <SectionLabel>Comprobante</SectionLabel>
       <input
         ref={inputRef}
@@ -318,15 +399,19 @@ export function PayScreen() {
           </>
         )}
       </div>
+        </>
+      )}
 
       <Button onClick={send} disabled={sending || (isPrepay && !proof)}>
         {sending
           ? "Enviando…"
-          : settleAll
-            ? `Enviar pago completo · ${total}`
-            : isPrepay
-              ? `Enviar pago adelantado · ${total}`
-              : "Enviar comprobante"}
+          : isAdmin
+            ? `Registrar pago · ${total}`
+            : settleAll
+              ? `Enviar pago completo · ${total}`
+              : isPrepay
+                ? `Enviar pago adelantado · ${total}`
+                : "Enviar comprobante"}
       </Button>
       {isPrepay && !proof && (
         <div style={{ fontSize: 11.5, color: colors.textMuted, marginTop: 8, textAlign: "center" }}>
@@ -334,6 +419,27 @@ export function PayScreen() {
         </div>
       )}
     </ScreenShell>
+  );
+}
+
+/** A selectable "who is this payment for" chip. */
+function PayeeChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        padding: "7px 12px",
+        borderRadius: 999,
+        fontSize: 12,
+        fontWeight: 700,
+        cursor: "pointer",
+        background: active ? "rgba(91,140,255,0.16)" : colors.surface2,
+        border: `1.5px solid ${active ? "#5b8cff" : colors.border}`,
+        color: active ? colors.textPrimary : colors.textSecondary,
+      }}
+    >
+      {label}
+    </div>
   );
 }
 

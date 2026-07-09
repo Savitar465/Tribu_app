@@ -72,6 +72,7 @@ Sign out from the **Perfil** tab.
 | `npm run build` | Production build |
 | `npm run start` | Serve the production build |
 | `npm run lint` | Run ESLint |
+| `npm test` | Run the unit tests (`tests/`, Node's built-in runner) |
 
 For local PWA push/HTTPS testing: `npx next dev --experimental-https`.
 
@@ -93,6 +94,7 @@ lib/
   db/                Row types + RLS-bound data-access API (fetch + mutations)
   store.tsx          Context + reducer; hydrates from Supabase, persists mutations
   selectors.ts       Pure derived data for the screens
+  paylogic.ts        Pure payment helpers (combined debts, advance coverage, CSV export)
   theme.ts           Design tokens (colors, status styles)
 components/
   auth/              Login / signup screen
@@ -102,7 +104,18 @@ components/
   pwa/               Service-worker registration + iOS install prompt
 supabase/migrations/ SQL schema, RLS, seed
 public/              Service worker, manifest icons
+tests/               Unit tests for the pure payment logic (node --test)
 ```
+
+### Payments
+
+- **Monthly charges** land in the `participant_charges` ledger with the cuota frozen at that month's official rate; prepaid balances settle automatically and suppress reminders while they cover the cuota.
+- **Combined payment** (Home → “Pagar todo junto”): every debt collected by the same administrator — across all their groups — is paid in one transaction (`submit_payment_v2` RPC) with a single shared receipt; each group keeps its own ledger rows.
+- **Paying for someone else**: the Pay screen lets you choose “mi cuota” or a fellow member with owed months. History records both who the payment belongs to and who made it (`paid_by`), and the beneficiary is notified on submission and review.
+- **Admins pay without receipts**: a group's admin registers payments (their own or a member's) instantly — no upload, no review.
+- **Per-member prices**: the admin can override any member's monthly cuota (tap the price chip on the roster). The override is stored in the group's currency (`group_participants.custom_amount`), so USD conversion and rounding rules still apply; already-billed months keep their frozen price and collection targets sum each member's actual cuota.
+- **Admin without a slot**: groups can be created (or toggled later) so the admin only manages the plan; they keep notifications, approvals and management access without a roster row.
+- **Export & archive**: the group history exports to an Excel-compatible CSV; afterwards the exported *paid* rows can be archived (soft delete via `archive_paid_charges`, confirmation required). Unpaid rows are never deleted.
 
 ## PWA
 

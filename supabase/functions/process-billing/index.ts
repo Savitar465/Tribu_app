@@ -110,33 +110,44 @@ Deno.serve(async (req) => {
     const chargeRows: { group_id: string; participant_id: string; cycle: string; cuota: number; paid: boolean; paid_at: string | null }[] = [];
     let settleFailed = false;
 
+    // The owner always hears about the run — even when they manage the plan
+    // without occupying a slot (no is_self roster row).
+    notes.push({
+      user_id: g.owner_id,
+      group_id: g.id,
+      title: `Cobro de ${g.name}`,
+      body: `Se generó el cobro de ${month}: la cuota es ${fmtBs(per)}.`,
+    });
+
     for (const p of roster ?? []) {
       // The owner collects — their own row is untouched by the charge.
-      if (p.is_self) {
-        if (p.user_id) {
-          notes.push({
-            user_id: p.user_id,
-            group_id: g.id,
-            title: `Cobro de ${g.name}`,
-            body: `Se generó el cobro de ${month}: la cuota es ${fmtBs(per)}.`,
-          });
-        }
-        continue;
-      }
+      if (p.is_self) continue;
       if (p.billed_cycle === cycle) continue; // already settled this cycle
+
+      // A member's custom price (in the group's currency) overrides the split,
+      // converted at the same rate and rounding rule as the group.
+      const custom = p.custom_amount != null ? Number(p.custom_amount) : null;
+      const cuota =
+        custom != null
+          ? g.round_cuota
+            ? Math.ceil(g.currency === "USD" ? custom * (rate as number) : custom)
+            : g.currency === "USD"
+              ? custom * (rate as number)
+              : custom
+          : per;
 
       let balance = Number(p.prepaid_balance) || 0;
       let paid = false;
       let body: string;
-      if (per > 0 && balance >= per) {
-        balance = round2(balance - per);
+      if (cuota > 0 && balance >= cuota) {
+        balance = round2(balance - cuota);
         paid = true;
-        body = `Cuota de ${month} (${fmtBs(per)}) cubierta con tu saldo adelantado · te quedan ${fmtBs(balance)}.`;
-        if (balance < per) body += " Recarga para seguir cubierto el próximo mes.";
+        body = `Cuota de ${month} (${fmtBs(cuota)}) cubierta con tu saldo adelantado · te quedan ${fmtBs(balance)}.`;
+        if (balance < cuota) body += " Recarga para seguir cubierto el próximo mes.";
       } else if (balance > 0) {
-        body = `Tu saldo adelantado (${fmtBs(balance)}) no cubre la cuota de ${month} (${fmtBs(per)}). Se guardará como compensación para tu próxima recarga · mientras tanto paga tu cuota del mes.`;
+        body = `Tu saldo adelantado (${fmtBs(balance)}) no cubre la cuota de ${month} (${fmtBs(cuota)}). Se guardará como compensación para tu próxima recarga · mientras tanto paga tu cuota del mes.`;
       } else {
-        body = `Se generó el cobro de ${month}: tu cuota es ${fmtBs(per)}.`;
+        body = `Se generó el cobro de ${month}: tu cuota es ${fmtBs(cuota)}.`;
       }
 
       const { error: sErr } = await supabase
@@ -152,7 +163,7 @@ Deno.serve(async (req) => {
         group_id: g.id,
         participant_id: p.id,
         cycle,
-        cuota: per,
+        cuota,
         paid,
         paid_at: paid ? new Date().toISOString() : null,
       });
@@ -210,7 +221,8 @@ Deno.serve(async (req) => {
   const { data: unpaidAll, error: uaErr } = await supabase
     .from("participant_charges")
     .select("*")
-    .eq("paid", false);
+    .eq("paid", false)
+    .is("deleted_at", null); // archived (exported) rows are never dunned
   if (uaErr) failures.push(`reminders: ${uaErr.message}`);
 
   if (unpaidAll && unpaidAll.length > 0) {
