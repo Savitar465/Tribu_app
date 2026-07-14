@@ -6,7 +6,7 @@ import { MemberRow } from "@/components/ui/MemberRow";
 import { SectionLabel } from "@/components/ui/SectionLabel";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { ScreenShell } from "@/components/screens/ScreenShell";
-import { getApprovals, getCurrentGroup, getMembers, getMyPrepaid, isPayable, statusStyle } from "@/lib/selectors";
+import { getApprovals, getCombinedPay, getCurrentGroup, getMembers, getMyPrepaid, isPayable, statusStyle } from "@/lib/selectors";
 import { useApp } from "@/lib/store";
 import { ACCENT, colors } from "@/lib/theme";
 
@@ -18,6 +18,19 @@ export function GroupScreen() {
   const approvals = getApprovals(state);
   const prepaid = group ? getMyPrepaid(state, group.id) : null;
   const st = group ? statusStyle(group.statusKey) : null;
+
+  // The joint-payment bundle this group belongs to (if the admin configured
+  // one and there's something to pay or prepay across ≥ 2 groups).
+  const combined = getCombinedPay(state);
+  const jointBundle = group
+    ? (combined.bundles.find(
+        (b) =>
+          b.items.some((it) => it.groupId === group.id) ||
+          b.prepayable.some((p) => p.groupId === group.id),
+      ) ?? null)
+    : null;
+  const showJoint =
+    jointBundle !== null && jointBundle.items.length + jointBundle.prepayable.length >= 2;
 
   if (!group || !st) return null;
 
@@ -142,17 +155,58 @@ export function GroupScreen() {
           </div>
         )}
 
-        {/* Prepay entry — hidden only while a proof/prepay is in review or the
-            member owes past months (arrears must be settled first). */}
-        {!group.owned &&
-          prepaid?.pendingAmount == null &&
+        {/* Prepay entry — anyone with a roster slot (members and participating
+            admins). Hidden only while a proof/prepay is in review or the member
+            owes past months (arrears must be settled first). Primary when the
+            cuota is already paid, since it's the only action left. */}
+        {prepaid &&
+          prepaid.pendingAmount == null &&
           (group.statusKey === "paid" || group.statusKey === "pending") && (
             <div style={{ marginBottom: 22 }}>
-              <Button variant="secondary" onClick={() => actions.go("pay")} style={{ padding: 15, fontSize: 14.5, fontWeight: 700 }}>
+              <Button
+                variant={group.statusKey === "paid" ? "primary" : "secondary"}
+                onClick={() => actions.go("pay")}
+                style={group.statusKey === "paid" ? undefined : { padding: 15, fontSize: 14.5, fontWeight: 700 }}
+              >
                 Pagar por adelantado
               </Button>
             </div>
           )}
+
+        {/* Joint payment: this group can be paid (or prepaid) together with
+            the admin's other joint groups — one QR, one receipt. */}
+        {showJoint && jointBundle && (
+          <div
+            onClick={() => actions.go("paycombined")}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              padding: "14px 16px",
+              borderRadius: 16,
+              background: "rgba(91,140,255,0.10)",
+              border: "1px solid rgba(91,140,255,0.35)",
+              cursor: "pointer",
+              marginBottom: 22,
+            }}
+          >
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: colors.textPrimary }}>
+                {jointBundle.total > 0
+                  ? `Pago en conjunto disponible · ${jointBundle.totalLabel}`
+                  : "Pago adelantado en conjunto disponible"}
+              </div>
+              <div style={{ fontSize: 12, color: colors.textMuted, marginTop: 1 }}>
+                {jointBundle.owned
+                  ? "Registra tu pago en tus grupos en conjunto · se aprueba al instante."
+                  : jointBundle.total > 0
+                    ? "Paga este grupo junto con los demás del mismo administrador · un solo QR y comprobante."
+                    : "Adelanta meses en este grupo y los demás del mismo administrador · un solo QR y comprobante."}
+              </div>
+            </div>
+            <span style={{ fontSize: 14, fontWeight: 800, color: colors.info }}>›</span>
+          </div>
+        )}
 
         <SectionLabel>Miembros del grupo</SectionLabel>
         <Card padding="6px 14px">

@@ -79,7 +79,7 @@ export function HomeScreen() {
                   cursor: "pointer",
                 }}
               >
-                Pagar todo junto · {h.multiPayTotal} →
+                {h.multiPayLabel}
               </div>
             )}
           </div>

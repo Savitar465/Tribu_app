@@ -333,18 +333,36 @@ export async function updateParticipantBilling(
   if (error) throw new Error(`updateParticipantBilling: ${error.message}`);
 }
 
-/** Set (or clear with null) a member's custom monthly price, in the group's
- * currency. Admin-only via RLS + the member-update guard. */
+/** Set (or clear with null) a member's custom monthly price and the currency
+ * it's defined in. Admin-only via RLS + the member-update guard. */
 export async function setParticipantPrice(
   supabase: SupabaseClient,
   participantId: string,
   amount: number | null,
+  currency: Currency | null,
 ): Promise<void> {
   const { error } = await supabase
     .from("group_participants")
-    .update({ custom_amount: amount })
+    .update({ custom_amount: amount, custom_currency: amount == null ? null : currency })
     .eq("id", participantId);
   if (error) throw new Error(`setParticipantPrice: ${error.message}`);
+}
+
+/** Re-price a participant's still-unpaid charge for a cycle (after the admin
+ * changes their custom price mid-month). Paid rows are never rewritten. */
+export async function updateChargeCuota(
+  supabase: SupabaseClient,
+  participantId: string,
+  cycle: string,
+  cuota: number,
+): Promise<void> {
+  const { error } = await supabase
+    .from("participant_charges")
+    .update({ cuota })
+    .eq("participant_id", participantId)
+    .eq("cycle", cycle)
+    .eq("paid", false);
+  if (error) throw new Error(`updateChargeCuota: ${error.message}`);
 }
 
 /** Approve or reject a participant's proof. */
@@ -513,6 +531,41 @@ export async function reorderParticipants(
   ]);
   if (ra.error) throw new Error(`reorderParticipants: ${ra.error.message}`);
   if (rb.error) throw new Error(`reorderParticipants: ${rb.error.message}`);
+}
+
+/** Flip whether a group joins the admin's joint-payment bundle. */
+export async function updateGroupJointPay(
+  supabase: SupabaseClient,
+  groupId: string,
+  jointPay: boolean,
+): Promise<void> {
+  const { error } = await supabase.from("groups").update({ joint_pay: jointPay }).eq("id", groupId);
+  if (error) throw new Error(`updateGroupJointPay: ${error.message}`);
+}
+
+/** Make one group the owner's joint-payment collection method (its QR/PayPal/
+ * bank are what the bundle shows). Clears the mark on the owner's other groups
+ * first — the partial unique index allows a single source per owner. */
+export async function setJointMethodSource(
+  supabase: SupabaseClient,
+  ownerId: string,
+  groupId: string,
+): Promise<void> {
+  const cleared = await supabase
+    .from("groups")
+    .update({ joint_method: false })
+    .eq("owner_id", ownerId)
+    .neq("id", groupId);
+  if (cleared.error) throw new Error(`setJointMethodSource(clear): ${cleared.error.message}`);
+  const set = await supabase.from("groups").update({ joint_method: true }).eq("id", groupId);
+  if (set.error) throw new Error(`setJointMethodSource(set): ${set.error.message}`);
+}
+
+/** Delete a group the user administers. RLS restricts this to the owner and
+ * every child table (participants, charges, payments, notifications) cascades. */
+export async function deleteGroup(supabase: SupabaseClient, groupId: string): Promise<void> {
+  const { error } = await supabase.from("groups").delete().eq("id", groupId);
+  if (error) throw new Error(`deleteGroup: ${error.message}`);
 }
 
 /** Update just the target member count of a group (cost split denominator). */

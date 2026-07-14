@@ -76,8 +76,24 @@ Deno.serve(async (req) => {
   const failures: string[] = [];
 
   for (const g of dueGroups) {
+    const { data: roster, error: pErr } = await supabase
+      .from("group_participants")
+      .select("*")
+      .eq("group_id", g.id);
+    if (pErr) {
+      failures.push(`${g.id}: ${pErr.message}`);
+      continue;
+    }
+
+    // A rate is needed for USD groups AND for BOB groups where some member's
+    // custom price is defined in USD.
+    const needsRate =
+      g.currency === "USD" ||
+      (roster ?? []).some(
+        (p) => p.custom_amount != null && (p.custom_currency ?? g.currency) === "USD",
+      );
     let rate = official;
-    if (g.currency === "USD" && rate == null) {
+    if (needsRate && rate == null) {
       const { data: owner } = await supabase
         .from("profiles")
         .select("exchange_rate")
@@ -93,15 +109,6 @@ Deno.serve(async (req) => {
     const totalBs = g.currency === "USD" ? g.amount * (rate as number) : g.amount;
     const n = Math.max(1, g.members_target);
     const per = g.round_cuota ? Math.ceil(totalBs / n) : totalBs / n;
-
-    const { data: roster, error: pErr } = await supabase
-      .from("group_participants")
-      .select("*")
-      .eq("group_id", g.id);
-    if (pErr) {
-      failures.push(`${g.id}: ${pErr.message}`);
-      continue;
-    }
 
     // Settle each member against their prepaid balance. The per-participant
     // `billed_cycle` stamp makes this idempotent across retries.
@@ -124,17 +131,14 @@ Deno.serve(async (req) => {
       if (p.is_self) continue;
       if (p.billed_cycle === cycle) continue; // already settled this cycle
 
-      // A member's custom price (in the group's currency) overrides the split,
-      // converted at the same rate and rounding rule as the group.
+      // A member's custom price (in its own currency — custom_currency, falling
+      // back to the group's) overrides the split, converted at the same rate
+      // and rounding rule as the group.
       const custom = p.custom_amount != null ? Number(p.custom_amount) : null;
+      const customCur = p.custom_currency ?? g.currency;
+      const customBs = custom != null && customCur === "USD" ? custom * (rate as number) : custom;
       const cuota =
-        custom != null
-          ? g.round_cuota
-            ? Math.ceil(g.currency === "USD" ? custom * (rate as number) : custom)
-            : g.currency === "USD"
-              ? custom * (rate as number)
-              : custom
-          : per;
+        customBs != null ? (g.round_cuota ? Math.ceil(customBs) : customBs) : per;
 
       let balance = Number(p.prepaid_balance) || 0;
       let paid = false;

@@ -1,7 +1,7 @@
 import { SERVICE_META } from "./data";
 import { fmtBs, fmtUsd, pct } from "./format";
 import { BACK_TITLE } from "./navigation";
-import { advanceCoverage, debtsByOwner, memberCuotaBs } from "./paylogic";
+import { advanceCoverage, memberCuotaBs } from "./paylogic";
 import type { State } from "./store";
 import type { GroupRow, ParticipantRow } from "./db/types";
 import { STATUS, colors, type StatusKey } from "./theme";
@@ -50,7 +50,12 @@ function memberPer(state: State, group: GroupRow, p: ParticipantRow, defaultPer:
   if (p.custom_amount == null) return defaultPer;
   const charge = state.charges.find((c) => c.participant_id === p.id && c.cycle === currentCycle());
   if (charge) return charge.cuota;
-  return memberCuotaBs(p.custom_amount, group.currency, state.profile.exchange_rate, group.round_cuota);
+  return memberCuotaBs(
+    p.custom_amount,
+    p.custom_currency ?? group.currency,
+    state.profile.exchange_rate,
+    group.round_cuota,
+  );
 }
 
 /** A participant's effective monthly cuota in Bs (custom price or default split). */
@@ -176,9 +181,13 @@ export function getHome(state: State) {
     hasGroups: groups.length > 0,
     payDue: fmtBs(due),
     dueCount: groups.filter((g) => g.statusKey === "pending" || g.statusKey === "overdue").length,
-    /** Combined-payment entry: some admin collects debts across several groups. */
-    multiPay: combined.hasMultiGroup,
-    multiPayTotal: combined.totalLabel,
+    /** Combined-payment entry: joint debts across groups, or joint prepay —
+     * shown even when nothing is due this month. */
+    multiPay: combined.hasBundle,
+    multiPayLabel:
+      combined.total > 0
+        ? `Pagar todo junto · ${combined.totalLabel} →`
+        : "Pagar por adelantado en conjunto →",
     prepaidTotal: fmtBs(
       state.participants
         .filter((p) => p.user_id === state.profile.id)
@@ -187,32 +196,55 @@ export function getHome(state: State) {
   };
 }
 
-/** Members of the current group (for the roster list). */
+/** Members of the current group (for the roster list). Non-admin viewers only
+ * see their own payment status and amounts — fellow members' figures (cuota,
+ * saldo, pagado/pendiente) are private to the admin. */
 export function getMembers(state: State, accent: string) {
   const g = getCurrentGroup(state);
   const row = g ? state.groups.find((x) => x.id === g.id) : undefined;
   if (!g || !row) return [];
-  return participantsOf(state, g.id).map((m) => ({
-    id: m.id,
-    isSelf: m.is_self,
-    name: m.name,
-    sub: [
-      m.email,
-      m.prepaid_balance > 0 ? `Saldo: ${fmtBs(m.prepaid_balance)}` : "",
-      m.custom_amount != null ? `Cuota propia: ${fmtBs(memberPer(state, row, m, g.defaultPerBs))}` : "",
-    ]
-      .filter(Boolean)
-      .join(" · "),
-    av: m.is_self ? accent : m.color,
-    /** Admin-set price override in the group's currency (null = default split). */
-    customAmount: m.custom_amount,
-    /** The member's effective monthly cuota, formatted. */
-    cuotaLabel: fmtBs(memberPer(state, row, m, g.defaultPerBs)),
-    paid: m.paid,
-    stLabel: m.paid ? "Pagado" : m.proof_pending ? "En revisión" : "Pendiente",
-    stColor: m.paid ? "#36d07a" : m.proof_pending ? "#7ba6ff" : "#f5b53d",
-    stBg: m.paid ? "rgba(54,208,122,0.14)" : m.proof_pending ? "rgba(123,166,255,0.14)" : "rgba(245,181,61,0.14)",
-  }));
+  return participantsOf(state, g.id).map((m) => {
+    // What the member pays each month: their custom price converted live at
+    // today's rate (so an edit shows immediately, even after this month's
+    // charge froze its own cuota) or the group's default split.
+    const per =
+      m.custom_amount != null
+        ? memberCuotaBs(
+            m.custom_amount,
+            m.custom_currency ?? row.currency,
+            state.profile.exchange_rate,
+            row.round_cuota,
+          )
+        : g.defaultPerBs;
+    const hideDetails = !g.owned && !m.is_self;
+    return {
+      id: m.id,
+      isSelf: m.is_self,
+      name: m.name,
+      sub: hideDetails
+        ? (m.email ?? "")
+        : [
+            m.email,
+            m.prepaid_balance > 0 ? `Saldo: ${fmtBs(m.prepaid_balance)}` : "",
+            m.custom_amount != null ? `Cuota propia: ${fmtBs(per)}` : "",
+          ]
+            .filter(Boolean)
+            .join(" · "),
+      av: m.is_self ? accent : m.color,
+      /** Admin-set price override (null = default split). */
+      customAmount: m.custom_amount,
+      /** Currency the custom price is defined in (null = the group's currency). */
+      customCurrency: m.custom_currency,
+      /** The member's effective monthly cuota, formatted. */
+      cuotaLabel: fmtBs(per),
+      /** The member's effective monthly cuota in Bs (feeds the admin's donut). */
+      cuotaBs: per,
+      paid: m.paid,
+      stLabel: hideDetails ? "" : m.paid ? "Pagado" : m.proof_pending ? "En revisión" : "Pendiente",
+      stColor: m.paid ? "#36d07a" : m.proof_pending ? "#7ba6ff" : "#f5b53d",
+      stBg: m.paid ? "rgba(54,208,122,0.14)" : m.proof_pending ? "rgba(123,166,255,0.14)" : "rgba(245,181,61,0.14)",
+    };
+  });
 }
 
 /** All pending proofs awaiting review in the current group (submission order). */
@@ -321,17 +353,6 @@ export function getMyArrears(state: State, groupId: string) {
   return getParticipantArrears(state, me?.id ?? null);
 }
 
-/** Roster members of the current group the signed-in user can pay for (anyone
- * but themself with owed months and no proof already in review). */
-export function getPayTargets(state: State) {
-  const g = getCurrentGroup(state);
-  if (!g) return [];
-  return participantsOf(state, g.id)
-    .filter((p) => p.user_id !== state.profile.id && !p.proof_pending)
-    .map((p) => ({ id: p.id, name: p.name, color: p.color, arrears: getParticipantArrears(state, p.id) }))
-    .filter((p) => p.arrears.count > 0);
-}
-
 /** Display name for the user who made a payment (resolved from the group's
  * roster, falling back to a generic label). Null when unknown/own payment. */
 export function payerLabel(state: State, groupId: string, payerId: string | null) {
@@ -341,34 +362,108 @@ export function payerLabel(state: State, groupId: string, payerId: string | null
   return p?.name ?? "otro miembro";
 }
 
-/** Everything the user owes, bundled per administrator — for the combined
- * multi-group payment screen. */
+/** Everything payable together, bundled per administrator — for the combined
+ * multi-group payment screen. Only groups the admin marked for joint payment
+ * (`joint_pay`) enter a bundle; the rest are always paid individually. Each
+ * bundle carries the owed groups (selectable) plus the joint groups the user
+ * is up to date in, which can be prepaid in the same transaction. The user's
+ * OWN joint groups form a bundle too: the admin registers their combined
+ * payment instantly (no receipt, no review). */
 export function getCombinedPay(state: State) {
-  const bundles = debtsByOwner(state.charges, state.participants, state.groups, state.profile.id).map((b) => {
-    const views = new Map(state.groups.map((g) => [g.id, buildGroup(state, g)]));
-    return {
-      ...b,
-      totalLabel: fmtBs(b.total),
-      items: b.items.map((it) => {
-        const v = views.get(it.groupId);
-        return {
-          ...it,
-          mono: v?.mono ?? "?",
-          color: v?.color ?? colors.info,
-          name: v?.name ?? it.groupName,
-          totalLabel: fmtBs(it.total),
-          monthsLabel: it.cycles.map(cycleShort).join(", "),
-        };
-      }),
-    };
-  });
+  const jointGroups = state.groups.filter((g) => g.joint_pay);
+  const views = new Map(state.groups.map((g) => [g.id, buildGroup(state, g)]));
+
+  // Joint groups per administrator where the signed-in user holds a slot.
+  const byOwner = new Map<string, GroupRow[]>();
+  for (const g of jointGroups) {
+    if (!state.participants.some((p) => p.group_id === g.id && p.user_id === state.profile.id)) continue;
+    byOwner.set(g.owner_id, [...(byOwner.get(g.owner_id) ?? []), g]);
+  }
+
+  const bundles = [...byOwner.entries()]
+    .map(([ownerId, ownerGroups]) => {
+      const rows = ownerGroups.map((g) => {
+        const me = state.participants.find(
+          (p) => p.group_id === g.id && p.user_id === state.profile.id,
+        )!;
+        const owed = state.charges
+          .filter((c) => c.participant_id === me.id && !c.paid)
+          .sort((a, b) => a.cycle.localeCompare(b.cycle));
+        return { g, me, owed, v: views.get(g.id)! };
+      });
+
+      // Groups with owed months (skipped while a proof is already in review).
+      const items = rows
+        .filter((r) => r.owed.length > 0 && !r.me.proof_pending)
+        .map((r) => {
+          const total = r.owed.reduce((a, c) => a + c.cuota, 0);
+          return {
+            participantId: r.me.id,
+            groupId: r.g.id,
+            name: r.v.name,
+            mono: r.v.mono,
+            color: r.v.color,
+            cycles: r.owed.map((c) => c.cycle),
+            total,
+            totalLabel: fmtBs(total),
+            monthsLabel: r.owed.map((c) => cycleShort(c.cycle)).join(", "),
+          };
+        });
+
+      // Joint groups the user is current in — prepayable within the bundle
+      // (nothing owed, nothing already in review).
+      const prepayable = rows
+        .filter((r) => r.owed.length === 0 && !r.me.proof_pending && r.me.prepay_pending == null)
+        .map((r) => ({
+          groupId: r.g.id,
+          participantId: r.me.id,
+          name: r.v.name,
+          mono: r.v.mono,
+          color: r.v.color,
+          cuotaBs: r.v.perBs,
+          cuotaLabel: r.v.cuota,
+        }));
+
+      // The bundle's single collection method: the group the admin marked as
+      // the source (fallback: the first joint group with a QR, then the first).
+      const source =
+        ownerGroups.find((g) => g.joint_method) ??
+        ownerGroups.find((g) => g.qr_image_url) ??
+        ownerGroups[0];
+
+      const total = items.reduce((a, i) => a + i.total, 0);
+      return {
+        ownerId,
+        /** True when the bundle is the signed-in admin's own joint groups. */
+        owned: ownerId === state.profile.id,
+        total,
+        totalLabel: fmtBs(total),
+        chargeCount: items.reduce((a, i) => a + i.cycles.length, 0),
+        groupCount: items.length,
+        /** Collection method shared by the whole bundle (the source group's). */
+        qrUrl: source?.qr_image_url ?? null,
+        paypalInfo: source?.paypal_info ?? null,
+        bankInfo: source?.bank_info ?? null,
+        methodGroupName: source ? (views.get(source.id)?.name ?? source.name) : null,
+        items,
+        prepayable,
+      };
+    })
+    // A bundle is useful with debts to pay or at least two prepayable groups.
+    .filter((b) => b.items.length > 0 || b.prepayable.length >= 2)
+    .sort((a, b) => b.total - a.total);
+
   const total = bundles.reduce((a, b) => a + b.total, 0);
   return {
     bundles,
     total,
     totalLabel: fmtBs(total),
-    /** True when some admin collects the user's debts across several groups. */
-    hasMultiGroup: bundles.some((b) => b.groupCount > 1),
+    /** True when some bundle spans two or more groups (debts and/or prepays). */
+    hasBundle: bundles.some((b) => b.items.length + b.prepayable.length >= 2),
+    /** True when some admin collects the user's debts across several joint groups. */
+    hasMultiGroup: bundles.some((b) => b.items.length > 1),
+    /** True when a bundle offers joint prepay without any debt to settle. */
+    hasJointPrepay: bundles.some((b) => b.items.length === 0 && b.prepayable.length >= 2),
   };
 }
 

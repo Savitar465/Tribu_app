@@ -42,6 +42,12 @@ export interface GroupRow {
   bank_info: string | null;
   /** False when the admin manages the plan without occupying a slot (no self row). */
   admin_participates: boolean;
+  /** True when the admin marked this group as payable together with their
+   * other joint groups (one QR / receipt for the whole bundle). */
+  joint_pay: boolean;
+  /** True on the single group whose payment methods (QR/PayPal/bank) the
+   * owner's joint-payment bundle uses. */
+  joint_method: boolean;
   created_at: string;
 }
 
@@ -83,8 +89,10 @@ export interface ParticipantRow {
   pay_cycles: string[] | null;
   /** User who submitted the pending proof (null = the member themself). */
   proof_by: string | null;
-  /** Admin-set price override in the group's currency (null = default split). */
+  /** Admin-set price override (null = default split). */
   custom_amount: number | null;
+  /** Currency `custom_amount` is defined in (null = the group's currency). */
+  custom_currency: Currency | null;
 }
 
 /** One month's charge for one participant (cuota frozen at that month's rate). */

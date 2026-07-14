@@ -104,6 +104,47 @@ export function memberCuotaBs(
   return round ? Math.ceil(bs) : bs;
 }
 
+/** Input for `checkCustomPrice`: the group's cost figures plus every roster
+ * row's price fields (the edited member is skipped via `editedId`). */
+export interface CustomPriceInput {
+  /** The edited member's new cuota, already converted to Bs (and rounded). */
+  newPerBs: number;
+  editedId: string;
+  roster: { id: string; custom_amount: number | null; custom_currency: "BOB" | "USD" | null }[];
+  groupCurrency: "BOB" | "USD";
+  /** Group monthly cost in Bs. */
+  totalBs: number;
+  /** Default per-member split in Bs. */
+  defaultPerBs: number;
+  rate: number;
+  round: boolean;
+}
+
+/**
+ * Validate a member's new custom cuota against what's left of the group's
+ * monthly cost once the other roster members' cuotas are taken (each at their
+ * own custom price, or the default split). E.g. a 50 Bs plan with two members
+ * paying 10 Bs each leaves 30 Bs available. With rounding on, each member's
+ * cuota may legitimately carry up to 1 Bs of round-up, so exactly that much
+ * excess is tolerated. `remaining` is the amount still available.
+ */
+export function checkCustomPrice(i: CustomPriceInput): { ok: boolean; remaining: number } {
+  const others = i.roster.filter((p) => p.id !== i.editedId);
+  const assigned = others.reduce(
+    (a, p) =>
+      a +
+      (p.custom_amount != null
+        ? memberCuotaBs(p.custom_amount, p.custom_currency ?? i.groupCurrency, i.rate, i.round)
+        : i.defaultPerBs),
+    0,
+  );
+  const tolerance = i.round ? others.length + 1 : 0.01;
+  return {
+    ok: assigned + i.newPerBs <= i.totalBs + tolerance,
+    remaining: Math.max(0, i.totalBs - assigned),
+  };
+}
+
 /** The next cycle (yyyy-mm) after the given one. */
 export function nextCycle(cycle: string): string {
   const [y, m] = cycle.split("-").map(Number);

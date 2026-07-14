@@ -185,7 +185,7 @@ export function MemberRow({
           <StatusBadge label={stLabel} bg={stBg} color={stColor} />
         </button>
       ) : (
-        <StatusBadge label={stLabel} bg={stBg} color={stColor} />
+        stLabel && <StatusBadge label={stLabel} bg={stBg} color={stColor} />
       )}
 
       {onRemove && (

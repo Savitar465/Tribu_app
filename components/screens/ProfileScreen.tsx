@@ -1,17 +1,46 @@
-import type { ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Card } from "@/components/ui/Card";
 import { Avatar } from "@/components/ui/Avatar";
 import { IconBadge } from "@/components/ui/IconBadge";
+import { Toggle } from "@/components/ui/Toggle";
 import { BellIcon, ChartIcon, ChevronRight, CreditCardIcon, GlobeIcon } from "@/components/ui/Icons";
 import { ScreenShell } from "@/components/screens/ScreenShell";
+import { disablePush, enablePush, getPushSubscription, pushSupported } from "@/lib/push";
 import { getProfileView } from "@/lib/selectors";
 import { useApp } from "@/lib/store";
 import { GRADIENT, colors } from "@/lib/theme";
+import { createClient } from "@/utils/supabase/client";
 
 /** Profile: user identity, group summary shortcut and account settings. */
 export function ProfileScreen() {
   const { state, actions } = useApp();
   const p = getProfileView(state);
+  const supabase = useMemo(() => createClient(), []);
+
+  // Push notifications: reflect whether THIS device is subscribed. Support is
+  // resolved in an effect so the server render (unsupported) hydrates cleanly.
+  const [pushAvailable, setPushAvailable] = useState(false);
+  const [pushOn, setPushOn] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  useEffect(() => {
+    setPushAvailable(pushSupported());
+    getPushSubscription().then((sub) => setPushOn(sub != null && Notification.permission === "granted"));
+  }, []);
+
+  const togglePush = async (value: boolean) => {
+    if (pushBusy || !pushSupported()) return;
+    setPushBusy(true);
+    try {
+      if (value) {
+        setPushOn(await enablePush(supabase));
+      } else {
+        await disablePush(supabase);
+        setPushOn(false);
+      }
+    } finally {
+      setPushBusy(false);
+    }
+  };
 
   return (
     <ScreenShell>
@@ -57,8 +86,14 @@ export function ProfileScreen() {
               <BellIcon size={16} color={colors.warning} />
             </IconBadge>
           }
-          label="Recordatorios"
-          trailing={<span style={{ fontSize: 12.5, color: colors.positive, fontWeight: 700 }}>Activos</span>}
+          label="Notificaciones"
+          trailing={
+            pushAvailable ? (
+              <Toggle value={pushOn} onChange={togglePush} />
+            ) : (
+              <span style={{ fontSize: 12.5, color: colors.textMuted, fontWeight: 600 }}>No disponible</span>
+            )
+          }
         />
         <SettingRow
           icon={

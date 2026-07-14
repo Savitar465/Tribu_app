@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   advanceCoverage,
   buildChargesCsv,
+  checkCustomPrice,
   debtsByOwner,
   memberCuotaBs,
   nextCycle,
@@ -106,4 +107,74 @@ test("buildChargesCsv produces an Excel-compatible UTF-8 file", () => {
   assert.equal(lines[1], "Spotify,2026-07,María,12.5,Pagado,2026-07-05,Jonas");
   // Commas and quotes inside values are quoted/escaped.
   assert.equal(lines[2], '"Grupo ""raro"", sí",2026-06,Ana,10,Pendiente,,');
+});
+
+test("checkCustomPrice caps the price at what the other members leave available", () => {
+  // The user's example: a 50 Bs plan where two members pay 10 Bs each leaves
+  // 30 Bs available for the edited member.
+  const roster = [
+    { id: "me", custom_amount: null, custom_currency: null },
+    { id: "a", custom_amount: 10, custom_currency: "BOB" as const },
+    { id: "b", custom_amount: 10, custom_currency: "BOB" as const },
+  ];
+  const check = (newPerBs: number) =>
+    checkCustomPrice({
+      newPerBs,
+      editedId: "me",
+      roster,
+      groupCurrency: "BOB",
+      totalBs: 50,
+      defaultPerBs: 50 / 3,
+      rate: 12,
+      round: false,
+    });
+  assert.equal(check(30).remaining, 30);
+  assert.equal(check(30).ok, true);
+  assert.equal(check(30.5).ok, false);
+});
+
+test("checkCustomPrice counts default-split members and USD custom prices", () => {
+  // 60 Bs total: one member takes 30 Bs (custom $2.5 at rate 12), another pays
+  // the default 10 Bs → 20 Bs remain available.
+  const roster = [
+    { id: "me", custom_amount: null, custom_currency: null },
+    { id: "usd", custom_amount: 2.5, custom_currency: "USD" as const },
+    { id: "plain", custom_amount: null, custom_currency: null },
+  ];
+  const check = (newPerBs: number) =>
+    checkCustomPrice({
+      newPerBs,
+      editedId: "me",
+      roster,
+      groupCurrency: "BOB",
+      totalBs: 60,
+      defaultPerBs: 10,
+      rate: 12,
+      round: false,
+    });
+  assert.equal(check(20).remaining, 20);
+  assert.equal(check(20).ok, true);
+  assert.equal(check(20.5).ok, false);
+});
+
+test("checkCustomPrice tolerates only the excess rounding can add", () => {
+  // 100 Bs / 6 slots rounded: default cuota is ceil(16.67) = 17. Setting the
+  // sixth member to the same rounded 17 (total 102) must stay legal, but
+  // anything past the 1 Bs-per-member allowance must not.
+  const roster = Array.from({ length: 6 }, (_, i) => ({
+    id: `m${i}`,
+    custom_amount: null,
+    custom_currency: null,
+  }));
+  const base = {
+    editedId: "m0",
+    roster,
+    groupCurrency: "BOB" as const,
+    totalBs: 100,
+    defaultPerBs: 17,
+    rate: 12,
+    round: true,
+  };
+  assert.equal(checkCustomPrice({ ...base, newPerBs: 17 }).ok, true);
+  assert.equal(checkCustomPrice({ ...base, newPerBs: 22 }).ok, false);
 });
