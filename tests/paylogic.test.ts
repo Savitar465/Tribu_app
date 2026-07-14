@@ -113,9 +113,9 @@ test("checkCustomPrice caps the price at what the other members leave available"
   // The user's example: a 50 Bs plan where two members pay 10 Bs each leaves
   // 30 Bs available for the edited member.
   const roster = [
-    { id: "me", custom_amount: null, custom_currency: null },
-    { id: "a", custom_amount: 10, custom_currency: "BOB" as const },
-    { id: "b", custom_amount: 10, custom_currency: "BOB" as const },
+    { id: "me", custom_amount: null, custom_currency: null, custom_pct: null },
+    { id: "a", custom_amount: 10, custom_currency: "BOB" as const, custom_pct: null },
+    { id: "b", custom_amount: 10, custom_currency: "BOB" as const, custom_pct: null },
   ];
   const check = (newPerBs: number) =>
     checkCustomPrice({
@@ -137,9 +137,9 @@ test("checkCustomPrice counts default-split members and USD custom prices", () =
   // 60 Bs total: one member takes 30 Bs (custom $2.5 at rate 12), another pays
   // the default 10 Bs → 20 Bs remain available.
   const roster = [
-    { id: "me", custom_amount: null, custom_currency: null },
-    { id: "usd", custom_amount: 2.5, custom_currency: "USD" as const },
-    { id: "plain", custom_amount: null, custom_currency: null },
+    { id: "me", custom_amount: null, custom_currency: null, custom_pct: null },
+    { id: "usd", custom_amount: 2.5, custom_currency: "USD" as const, custom_pct: null },
+    { id: "plain", custom_amount: null, custom_currency: null, custom_pct: null },
   ];
   const check = (newPerBs: number) =>
     checkCustomPrice({
@@ -165,6 +165,7 @@ test("checkCustomPrice tolerates only the excess rounding can add", () => {
     id: `m${i}`,
     custom_amount: null,
     custom_currency: null,
+    custom_pct: null,
   }));
   const base = {
     editedId: "m0",

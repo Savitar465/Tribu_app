@@ -93,6 +93,9 @@ export interface ParticipantRow {
   custom_amount: number | null;
   /** Currency `custom_amount` is defined in (null = the group's currency). */
   custom_currency: Currency | null;
+  /** Admin-set percentage of the group total (null = not percentage-based).
+   * When set, overrides custom_amount: cuota = totalBs * custom_pct / 100. */
+  custom_pct: number | null;
 }
 
 /** One month's charge for one participant (cuota frozen at that month's rate). */

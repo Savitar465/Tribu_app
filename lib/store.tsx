@@ -17,7 +17,7 @@ import { MEMBER_COLORS, SERVICE_META } from "@/lib/data";
 import { getOfficialRate } from "@/lib/rates";
 import { fmtBs, sanitizeNumeric } from "@/lib/format";
 import { BACK_MAP } from "@/lib/navigation";
-import { checkCustomPrice, memberCuotaBs } from "@/lib/paylogic";
+import { checkCustomPrice, checkCustomPct, memberCuotaBs, memberCuotaFromPct } from "@/lib/paylogic";
 import { buildGroup, currentCycle, cycleLabel, getEditErrors, getMemberCuota } from "@/lib/selectors";
 import type { Currency, Screen, ServiceId } from "@/lib/types";
 
@@ -138,7 +138,7 @@ type Action =
   | { type: "applyRenameMember"; participantId: string; name: string }
   | { type: "applyMoveMember"; a: { id: string; sort: number }; b: { id: string; sort: number } }
   | { type: "applyMemberPaid"; participantId: string; paid: boolean }
-  | { type: "applyMemberPrice"; participantId: string; amount: number | null; currency: Currency | null }
+  | { type: "applyMemberPrice"; participantId: string; amount: number | null; currency: Currency | null; pct: number | null }
   | { type: "applyGroupCost"; groupId: string; amount: number; currency: Currency; members: number; billingDay: number; due: string; round: boolean; billedCuota: number | null }
   | { type: "applyGroupQr"; groupId: string; url: string | null }
   | { type: "applyGroupPayMethods"; groupId: string; paypal: string | null; bank: string | null }
@@ -286,13 +286,20 @@ function reducer(state: State, action: Action): State {
     case "applyMemberPrice": {
       const participants = state.participants.map((p) =>
         p.id === action.participantId
-          ? { ...p, custom_amount: action.amount, custom_currency: action.amount == null ? null : action.currency }
+          ? {
+              ...p,
+              custom_amount: action.pct != null ? null : action.amount,
+              custom_currency: action.pct != null ? null : (action.amount == null ? null : action.currency),
+              custom_pct: action.pct,
+            }
           : p,
       );
-      return flash(
-        { ...state, participants },
-        action.amount != null ? "Cuota personalizada guardada" : "Cuota personalizada eliminada",
-      );
+      const msg = action.pct != null
+        ? `Cuota ${action.pct}% guardada`
+        : action.amount != null
+          ? "Cuota personalizada guardada"
+          : "Cuota personalizada eliminada";
+      return flash({ ...state, participants }, msg);
     }
 
     case "applyGroupCost": {
@@ -655,9 +662,10 @@ export interface Actions {
   removeMember: (participantId: string) => void;
   setMemberPaid: (participantId: string, paid: boolean) => void;
   /** Set a member's custom monthly price in the given currency ("" = default).
+   * When `pctMode` is true, `raw` is a percentage (1–100) of the group total.
    * Validates against the group's monthly total and re-prices this month's
    * still-unpaid charge. True on success. */
-  setMemberPrice: (participantId: string, raw: string, currency?: Currency) => Promise<boolean>;
+  setMemberPrice: (participantId: string, raw: string, currency?: Currency, pctMode?: boolean) => Promise<boolean>;
   renameMember: (participantId: string, name: string) => void;
   moveMember: (participantId: string, dir: -1 | 1) => void;
   /** Run due monthly charges for owned groups: refresh the official rate and notify each member. */
@@ -1387,12 +1395,59 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
       // The new price is validated against the group's monthly total, and this
       // month's still-unpaid charge is re-priced so the member owes the new
       // amount right away; paid or past months keep their frozen cuota.
-      setMemberPrice: async (participantId, raw, currency = "BOB") => {
+      setMemberPrice: async (participantId, raw, currency = "BOB", pctMode = false) => {
         const p = ref.current.participants.find((x) => x.id === participantId);
         if (!p) return false;
         const group = ref.current.groups.find((g) => g.id === p.group_id);
         if (!group) return false;
         const clean = raw.trim();
+        const view = buildGroup(ref.current, group);
+
+        // --- Percentage mode ---
+        if (pctMode) {
+          if (clean === "") {
+            // Clear: fall through to the reset path below.
+          } else {
+            const pctVal = parseFloat(clean);
+            if (!Number.isFinite(pctVal) || pctVal <= 0 || pctVal > 100) {
+              dispatch({ type: "flash", msg: "Ingresa un porcentaje entre 0.1 y 100" });
+              return false;
+            }
+            const check = checkCustomPct({
+              newPct: pctVal,
+              editedId: participantId,
+              roster: ref.current.participants.filter((x) => x.group_id === group.id),
+              totalBs: view.totalBs,
+              round: group.round_cuota,
+            });
+            if (!check.ok) {
+              dispatch({
+                type: "flash",
+                msg: `El porcentaje (${pctVal}%) supera el disponible: ${check.remainingPct.toFixed(1)}%`,
+              });
+              return false;
+            }
+            const newPer = check.resultBs;
+            try {
+              await api.setParticipantPrice(supabase, participantId, null, null, pctVal);
+              dispatch({ type: "applyMemberPrice", participantId, amount: null, currency: null, pct: pctVal });
+              const cycle = currentCycle();
+              const charge = ref.current.charges.find(
+                (c) => c.participant_id === participantId && c.cycle === cycle && !c.paid,
+              );
+              if (charge && charge.cuota !== newPer) {
+                await api.updateChargeCuota(supabase, participantId, cycle, newPer);
+                dispatch({ type: "applyChargeCuota", participantId, cycle, cuota: newPer });
+              }
+              return true;
+            } catch (e) {
+              fail(e);
+              return false;
+            }
+          }
+        }
+
+        // --- Fixed-amount mode (or reset) ---
         let amount: number | null = null;
         if (clean !== "") {
           amount = parseFloat(clean);
@@ -1405,21 +1460,20 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
             return false;
           }
         }
-        if (amount === p.custom_amount && (amount == null || currency === (p.custom_currency ?? group.currency))) {
+        if (
+          amount === p.custom_amount &&
+          p.custom_pct == null &&
+          (amount == null || currency === (p.custom_currency ?? group.currency))
+        ) {
           return true;
         }
 
-        const view = buildGroup(ref.current, group);
-        // The member's new effective cuota (Bs) at today's rate.
         const newPer =
           amount != null
             ? memberCuotaBs(amount, currency, rate(), group.round_cuota)
             : view.defaultPerBs;
 
         if (amount != null) {
-          // The new cuota can only take what the other members' cuotas leave
-          // of the monthly cost (e.g. 50 Bs plan, two members paying 10 Bs
-          // each → 30 Bs available).
           const check = checkCustomPrice({
             newPerBs: newPer,
             editedId: participantId,
@@ -1441,8 +1495,7 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
 
         try {
           await api.setParticipantPrice(supabase, participantId, amount, currency);
-          dispatch({ type: "applyMemberPrice", participantId, amount, currency });
-          // Update what the member owes this month (only while still unpaid).
+          dispatch({ type: "applyMemberPrice", participantId, amount, currency, pct: null });
           const cycle = currentCycle();
           const charge = ref.current.charges.find(
             (c) => c.participant_id === participantId && c.cycle === cycle && !c.paid,
@@ -1564,12 +1617,14 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
               // Per-participant stamp: never deduct the same cycle twice.
               if (p.billed_cycle === cycle) continue;
 
-              // A member's custom price (in its own currency) overrides the
-              // split, converted at the same rate and rounding as the group.
+              // A member's percentage or custom price overrides the default
+              // split, converted/calculated at this billing cycle's rate.
               const cuota =
-                p.custom_amount != null
-                  ? memberCuotaBs(p.custom_amount, p.custom_currency ?? g.currency, rate, g.round_cuota)
-                  : per;
+                p.custom_pct != null
+                  ? memberCuotaFromPct(p.custom_pct, totalBs, g.round_cuota)
+                  : p.custom_amount != null
+                    ? memberCuotaBs(p.custom_amount, p.custom_currency ?? g.currency, rate, g.round_cuota)
+                    : per;
               let balance = p.prepaid_balance;
               let paid = false;
               let body: string;

@@ -110,7 +110,7 @@ export interface CustomPriceInput {
   /** The edited member's new cuota, already converted to Bs (and rounded). */
   newPerBs: number;
   editedId: string;
-  roster: { id: string; custom_amount: number | null; custom_currency: "BOB" | "USD" | null }[];
+  roster: { id: string; custom_amount: number | null; custom_currency: "BOB" | "USD" | null; custom_pct: number | null }[];
   groupCurrency: "BOB" | "USD";
   /** Group monthly cost in Bs. */
   totalBs: number;
@@ -133,15 +133,56 @@ export function checkCustomPrice(i: CustomPriceInput): { ok: boolean; remaining:
   const assigned = others.reduce(
     (a, p) =>
       a +
-      (p.custom_amount != null
-        ? memberCuotaBs(p.custom_amount, p.custom_currency ?? i.groupCurrency, i.rate, i.round)
-        : i.defaultPerBs),
+      (p.custom_pct != null
+        ? memberCuotaFromPct(p.custom_pct, i.totalBs, i.round)
+        : p.custom_amount != null
+          ? memberCuotaBs(p.custom_amount, p.custom_currency ?? i.groupCurrency, i.rate, i.round)
+          : i.defaultPerBs),
     0,
   );
   const tolerance = i.round ? others.length + 1 : 0.01;
   return {
     ok: assigned + i.newPerBs <= i.totalBs + tolerance,
     remaining: Math.max(0, i.totalBs - assigned),
+  };
+}
+
+/**
+ * A member's monthly cuota (Bs) from a percentage of the group total.
+ * `pct` is 1–100; `round` applies the group's round-up rule.
+ */
+export function memberCuotaFromPct(pct: number, totalBs: number, round: boolean): number {
+  const bs = totalBs * pct / 100;
+  return round ? Math.ceil(bs) : bs;
+}
+
+/** Sum of percentages already assigned to roster members (excluding `editedId`). */
+export function assignedPct(
+  roster: { id: string; custom_pct: number | null }[],
+  editedId: string,
+): number {
+  return roster
+    .filter((p) => p.id !== editedId && p.custom_pct != null)
+    .reduce((a, p) => a + p.custom_pct!, 0);
+}
+
+/** Validate a percentage-based cuota: the new pct plus all other members'
+ * percentages must not exceed 100%, and the resulting Bs must fit within
+ * the group's monthly total. */
+export function checkCustomPct(i: {
+  newPct: number;
+  editedId: string;
+  roster: CustomPriceInput["roster"];
+  totalBs: number;
+  round: boolean;
+}): { ok: boolean; remainingPct: number; resultBs: number } {
+  const othersPct = assignedPct(i.roster, i.editedId);
+  const remainingPct = Math.max(0, 100 - othersPct);
+  const resultBs = memberCuotaFromPct(i.newPct, i.totalBs, i.round);
+  return {
+    ok: i.newPct <= remainingPct + 0.01,
+    remainingPct,
+    resultBs,
   };
 }
 

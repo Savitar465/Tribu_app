@@ -15,7 +15,7 @@ import { CostEditor } from "@/components/screens/admin/CostEditor";
 import { CuotaDonut } from "@/components/screens/admin/CuotaDonut";
 import { PayMethodsEditor } from "@/components/screens/admin/PayMethodsEditor";
 import { fmtBs, sanitizeNumeric } from "@/lib/format";
-import { checkCustomPrice, memberCuotaBs } from "@/lib/paylogic";
+import { assignedPct, checkCustomPct, checkCustomPrice, memberCuotaBs, memberCuotaFromPct } from "@/lib/paylogic";
 import { getApprovals, getCurrentGroup, getGroupArrears, getGroups, getMembers } from "@/lib/selectors";
 import { useApp } from "@/lib/store";
 import { ACCENT, colors } from "@/lib/theme";
@@ -30,6 +30,8 @@ export function AdminScreen() {
   const [priceDraft, setPriceDraft] = useState("");
   /** Currency the draft custom price is defined in. */
   const [priceCur, setPriceCur] = useState<Currency>("BOB");
+  /** Whether the custom price editor is in percentage mode. */
+  const [priceMode, setPriceMode] = useState<"amount" | "pct">("amount");
   const [priceSaving, setPriceSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -49,7 +51,13 @@ export function AdminScreen() {
   // plus a neutral slice for unfilled slots still charged at the default split.
   const freeSlots = Math.max(0, parseInt(group.members, 10) - members.length);
   const cuotaSlices = [
-    ...members.map((m) => ({ id: m.id, name: m.name, color: m.av, value: m.cuotaBs, label: m.cuotaLabel })),
+    ...members.map((m) => ({
+      id: m.id,
+      name: m.name,
+      color: m.av,
+      value: m.cuotaBs,
+      label: m.customPct != null ? `${m.customPct}% · ${m.cuotaLabel}` : m.cuotaLabel,
+    })),
     ...(freeSlots > 0
       ? [
           {
@@ -79,8 +87,24 @@ export function AdminScreen() {
   // the other members' cuotas leave of the monthly cost).
   const groupRow = state.groups.find((x) => x.id === group.id);
   const draftAmt = parseFloat(priceDraft);
+  const roster = state.participants.filter((p) => p.group_id === group.id);
+
+  // --- Percentage mode derivations ---
+  const draftPctCheck =
+    priceFor !== null && groupRow && priceMode === "pct" && Number.isFinite(draftAmt) && draftAmt > 0
+      ? checkCustomPct({
+          newPct: draftAmt,
+          editedId: priceFor,
+          roster,
+          totalBs: group.totalBs,
+          round: groupRow.round_cuota,
+        })
+      : null;
+  const othersPctSum = priceFor !== null ? assignedPct(roster, priceFor) : 0;
+
+  // --- Fixed-amount mode derivations ---
   const draftBs =
-    priceFor !== null && groupRow && Number.isFinite(draftAmt) && draftAmt > 0
+    priceFor !== null && groupRow && priceMode === "amount" && Number.isFinite(draftAmt) && draftAmt > 0
       ? memberCuotaBs(draftAmt, priceCur, state.profile.exchange_rate, groupRow.round_cuota)
       : null;
   const priceCheck =
@@ -88,7 +112,7 @@ export function AdminScreen() {
       ? checkCustomPrice({
           newPerBs: draftBs,
           editedId: priceFor,
-          roster: state.participants.filter((p) => p.group_id === group.id),
+          roster,
           groupCurrency: groupRow.currency,
           totalBs: group.totalBs,
           defaultPerBs: group.defaultPerBs,
@@ -213,10 +237,16 @@ export function AdminScreen() {
               onMoveUp={i > 0 ? () => actions.moveMember(m.id, -1) : undefined}
               onMoveDown={i < members.length - 1 ? () => actions.moveMember(m.id, 1) : undefined}
               onRemove={m.isSelf ? undefined : () => actions.removeMember(m.id)}
-              priceLabel={m.cuotaLabel}
-              customPrice={m.customAmount != null}
+              priceLabel={m.customPct != null ? `${m.customPct}%` : m.cuotaLabel}
+              customPrice={m.customAmount != null || m.customPct != null}
               onEditPrice={() => {
-                setPriceDraft(m.customAmount != null ? String(m.customAmount) : "");
+                if (m.customPct != null) {
+                  setPriceMode("pct");
+                  setPriceDraft(String(m.customPct));
+                } else {
+                  setPriceMode("amount");
+                  setPriceDraft(m.customAmount != null ? String(m.customAmount) : "");
+                }
                 setPriceCur(m.customCurrency ?? (group.isUsd ? "USD" : "BOB"));
                 setPriceFor(m.id);
               }}
@@ -454,24 +484,28 @@ export function AdminScreen() {
         </div>
       </Modal>
 
-      {/* Per-member custom price editor */}
+      {/* Per-member custom price editor (fixed amount or percentage) */}
       <Modal
         open={priceFor !== null}
         onClose={() => setPriceFor(null)}
         title={`Cuota de ${members.find((m) => m.id === priceFor)?.name ?? "miembro"}`}
       >
         <div style={{ fontSize: 12.5, color: colors.textMuted, lineHeight: 1.5, marginBottom: 14 }}>
-          Deja el campo vacío para usar la cuota normal del grupo ({group.cuota}). Los precios en
-          USD se convierten al tipo de cambio de cada cobro; los meses ya pagados mantienen su
-          precio.
+          Deja el campo vacío para usar la cuota normal del grupo ({group.cuota}).
+          {priceMode === "pct"
+            ? " El porcentaje se recalcula cada mes al tipo de cambio vigente; los meses ya cobrados mantienen su precio."
+            : " Los precios en USD se convierten al tipo de cambio de cada cobro; los meses ya pagados mantienen su precio."}
         </div>
 
-        {/* Currency of the custom price */}
+        {/* Mode toggle: fixed amount vs percentage */}
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-          {(["BOB", "USD"] as const).map((cur) => (
+          {(["amount", "pct"] as const).map((mode) => (
             <div
-              key={cur}
-              onClick={() => setPriceCur(cur)}
+              key={mode}
+              onClick={() => {
+                setPriceMode(mode);
+                setPriceDraft("");
+              }}
               style={{
                 flex: 1,
                 textAlign: "center",
@@ -480,26 +514,70 @@ export function AdminScreen() {
                 fontSize: 13,
                 fontWeight: 700,
                 cursor: "pointer",
-                background: priceCur === cur ? "rgba(91,140,255,0.16)" : colors.surface2,
-                border: `1.5px solid ${priceCur === cur ? "#5b8cff" : colors.border}`,
-                color: priceCur === cur ? colors.textPrimary : colors.textSecondary,
+                background: priceMode === mode ? "rgba(91,140,255,0.16)" : colors.surface2,
+                border: `1.5px solid ${priceMode === mode ? "#5b8cff" : colors.border}`,
+                color: priceMode === mode ? colors.textPrimary : colors.textSecondary,
               }}
             >
-              {cur === "BOB" ? "Bolivianos (Bs)" : "Dólares (USD)"}
+              {mode === "amount" ? "Monto fijo" : "Porcentaje %"}
             </div>
           ))}
         </div>
 
+        {/* Currency selector (only in fixed-amount mode) */}
+        {priceMode === "amount" && (
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            {(["BOB", "USD"] as const).map((cur) => (
+              <div
+                key={cur}
+                onClick={() => setPriceCur(cur)}
+                style={{
+                  flex: 1,
+                  textAlign: "center",
+                  padding: "9px 0",
+                  borderRadius: 12,
+                  fontSize: 13,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  background: priceCur === cur ? "rgba(91,140,255,0.16)" : colors.surface2,
+                  border: `1.5px solid ${priceCur === cur ? "#5b8cff" : colors.border}`,
+                  color: priceCur === cur ? colors.textPrimary : colors.textSecondary,
+                }}
+              >
+                {cur === "BOB" ? "Bolivianos (Bs)" : "Dólares (USD)"}
+              </div>
+            ))}
+          </div>
+        )}
+
         <TextField
-          label={`Cuota mensual (${priceCur === "USD" ? "USD" : "Bs"})`}
+          label={priceMode === "pct" ? "Porcentaje del total (%)" : `Cuota mensual (${priceCur === "USD" ? "USD" : "Bs"})`}
           value={priceDraft}
           onChange={(v) => setPriceDraft(sanitizeNumeric(v))}
           inputMode="decimal"
           fontWeight={700}
         />
 
-        {/* Live result: converted/rounded cuota and what the month still has room for */}
-        {draftBs != null && priceCheck && (
+        {/* Live preview: percentage mode */}
+        {priceMode === "pct" && draftPctCheck && (
+          <div
+            style={{
+              fontSize: 12,
+              lineHeight: 1.5,
+              marginTop: 10,
+              color: draftPctCheck.ok ? colors.textMuted : colors.danger,
+            }}
+          >
+            Cuota resultante: <strong style={{ color: draftPctCheck.ok ? colors.textPrimary : colors.danger }}>{fmtBs(draftPctCheck.resultBs)}</strong>
+            {groupRow?.round_cuota ? " (redondeada)" : ""}
+            <br />
+            Porcentaje asignado a otros: <strong>{othersPctSum.toFixed(1)}%</strong> · disponible: <strong style={{ color: draftPctCheck.ok ? colors.positive : colors.danger }}>{draftPctCheck.remainingPct.toFixed(1)}%</strong>
+            {draftPctCheck.ok ? "" : " — supera el porcentaje disponible"}
+          </div>
+        )}
+
+        {/* Live preview: fixed-amount mode */}
+        {priceMode === "amount" && draftBs != null && priceCheck && (
           <div
             style={{
               fontSize: 12,
@@ -515,7 +593,8 @@ export function AdminScreen() {
         )}
 
         <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-          {members.find((m) => m.id === priceFor)?.customAmount != null && (
+          {(members.find((m) => m.id === priceFor)?.customAmount != null ||
+            members.find((m) => m.id === priceFor)?.customPct != null) && (
             <Button
               variant="secondary"
               disabled={priceSaving}
@@ -536,7 +615,7 @@ export function AdminScreen() {
             onClick={async () => {
               if (!priceFor) return;
               setPriceSaving(true);
-              const ok = await actions.setMemberPrice(priceFor, priceDraft, priceCur);
+              const ok = await actions.setMemberPrice(priceFor, priceDraft, priceCur, priceMode === "pct");
               setPriceSaving(false);
               if (ok) setPriceFor(null);
             }}

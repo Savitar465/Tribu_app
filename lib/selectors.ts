@@ -1,7 +1,7 @@
 import { SERVICE_META } from "./data";
 import { fmtBs, fmtUsd, pct } from "./format";
 import { BACK_TITLE } from "./navigation";
-import { advanceCoverage, memberCuotaBs } from "./paylogic";
+import { advanceCoverage, memberCuotaBs, memberCuotaFromPct } from "./paylogic";
 import type { State } from "./store";
 import type { GroupRow, ParticipantRow } from "./db/types";
 import { STATUS, colors, type StatusKey } from "./theme";
@@ -45,8 +45,15 @@ function costOf(group: GroupRow, rate: number) {
 
 /** A member's cuota (Bs): their admin-set custom price when they have one —
  * frozen at this month's charge if already billed, previewed at today's rate
- * otherwise — or the group's default split. */
+ * otherwise — or the group's default split. Percentage-based pricing
+ * (`custom_pct`) takes precedence and recalculates at the current rate. */
 function memberPer(state: State, group: GroupRow, p: ParticipantRow, defaultPer: number): number {
+  if (p.custom_pct != null) {
+    const charge = state.charges.find((c) => c.participant_id === p.id && c.cycle === currentCycle());
+    if (charge) return charge.cuota;
+    const totalBs = group.currency === "USD" ? group.amount * state.profile.exchange_rate : group.amount;
+    return memberCuotaFromPct(p.custom_pct, totalBs, group.round_cuota);
+  }
   if (p.custom_amount == null) return defaultPer;
   const charge = state.charges.find((c) => c.participant_id === p.id && c.cycle === currentCycle());
   if (charge) return charge.cuota;
@@ -204,19 +211,27 @@ export function getMembers(state: State, accent: string) {
   const row = g ? state.groups.find((x) => x.id === g.id) : undefined;
   if (!g || !row) return [];
   return participantsOf(state, g.id).map((m) => {
-    // What the member pays each month: their custom price converted live at
-    // today's rate (so an edit shows immediately, even after this month's
-    // charge froze its own cuota) or the group's default split.
+    // What the member pays each month: percentage of total, fixed custom
+    // price, or the group's default split.
+    const totalBs = row.currency === "USD" ? row.amount * state.profile.exchange_rate : row.amount;
     const per =
-      m.custom_amount != null
-        ? memberCuotaBs(
-            m.custom_amount,
-            m.custom_currency ?? row.currency,
-            state.profile.exchange_rate,
-            row.round_cuota,
-          )
-        : g.defaultPerBs;
+      m.custom_pct != null
+        ? memberCuotaFromPct(m.custom_pct, totalBs, row.round_cuota)
+        : m.custom_amount != null
+          ? memberCuotaBs(
+              m.custom_amount,
+              m.custom_currency ?? row.currency,
+              state.profile.exchange_rate,
+              row.round_cuota,
+            )
+          : g.defaultPerBs;
     const hideDetails = !g.owned && !m.is_self;
+    const customLabel =
+      m.custom_pct != null
+        ? `${m.custom_pct}% · ${fmtBs(per)}`
+        : m.custom_amount != null
+          ? `Cuota propia: ${fmtBs(per)}`
+          : "";
     return {
       id: m.id,
       isSelf: m.is_self,
@@ -226,7 +241,7 @@ export function getMembers(state: State, accent: string) {
         : [
             m.email,
             m.prepaid_balance > 0 ? `Saldo: ${fmtBs(m.prepaid_balance)}` : "",
-            m.custom_amount != null ? `Cuota propia: ${fmtBs(per)}` : "",
+            customLabel,
           ]
             .filter(Boolean)
             .join(" · "),
@@ -235,6 +250,8 @@ export function getMembers(state: State, accent: string) {
       customAmount: m.custom_amount,
       /** Currency the custom price is defined in (null = the group's currency). */
       customCurrency: m.custom_currency,
+      /** Admin-set percentage of the group total (null = not percentage-based). */
+      customPct: m.custom_pct,
       /** The member's effective monthly cuota, formatted. */
       cuotaLabel: fmtBs(per),
       /** The member's effective monthly cuota in Bs (feeds the admin's donut). */

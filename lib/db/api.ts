@@ -334,16 +334,23 @@ export async function updateParticipantBilling(
 }
 
 /** Set (or clear with null) a member's custom monthly price and the currency
- * it's defined in. Admin-only via RLS + the member-update guard. */
+ * it's defined in. Admin-only via RLS + the member-update guard.
+ * When `pct` is provided, the member pays that percentage of the group total
+ * each month (recalculated at each billing cycle's exchange rate). */
 export async function setParticipantPrice(
   supabase: SupabaseClient,
   participantId: string,
   amount: number | null,
   currency: Currency | null,
+  pct: number | null = null,
 ): Promise<void> {
   const { error } = await supabase
     .from("group_participants")
-    .update({ custom_amount: amount, custom_currency: amount == null ? null : currency })
+    .update({
+      custom_amount: pct != null ? null : amount,
+      custom_currency: pct != null ? null : (amount == null ? null : currency),
+      custom_pct: pct,
+    })
     .eq("id", participantId);
   if (error) throw new Error(`setParticipantPrice: ${error.message}`);
 }

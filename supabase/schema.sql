@@ -114,7 +114,10 @@ create table if not exists public.group_participants (
   -- Admin-set price override and the currency it's defined in (null = the
   -- group's currency / the default split).
   custom_amount   numeric check (custom_amount is null or custom_amount > 0),
-  custom_currency text check (custom_currency is null or custom_currency in ('BOB', 'USD'))
+  custom_currency text check (custom_currency is null or custom_currency in ('BOB', 'USD')),
+  -- Percentage of the group total (1–100); overrides custom_amount when set.
+  -- Recalculated at each billing cycle's exchange rate.
+  custom_pct      numeric check (custom_pct is null or (custom_pct > 0 and custom_pct <= 100))
 );
 create index if not exists participants_group_idx on public.group_participants (group_id);
 
@@ -363,6 +366,7 @@ begin
      or new.prepaid_balance is distinct from old.prepaid_balance
      or new.custom_amount   is distinct from old.custom_amount
      or new.custom_currency is distinct from old.custom_currency
+     or new.custom_pct      is distinct from old.custom_pct
      or new.billed_cycle    is distinct from old.billed_cycle then
     raise exception 'Members may only submit their own payment proof';
   end if;
