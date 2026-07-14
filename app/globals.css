@@ -51,3 +51,10 @@ body {
     transform: translateY(0);
   }
 }
+
+/* Pull-to-refresh spinner rotation. */
+@keyframes tribuSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
+import { PullToRefresh } from "@/components/PullToRefresh";
 import { BackBar } from "@/components/phone/BackBar";
 import { Toast } from "@/components/phone/Toast";
 import { useApp } from "@/lib/store";
-import { TABBED_SCREENS } from "@/lib/navigation";
+import { REFRESHABLE_SCREENS, TABBED_SCREENS } from "@/lib/navigation";
 import { colors } from "@/lib/theme";
 import { Sidebar } from "./Sidebar";
 
@@ -12,20 +13,21 @@ import { Sidebar } from "./Sidebar";
  * wide monitors while the app fills the whole window.
  */
 export function DesktopShell({ children }: { children: ReactNode }) {
-  const { state } = useApp();
+  const { state, actions } = useApp();
   const tabbed = TABBED_SCREENS.includes(state.screen);
+  const refreshable = REFRESHABLE_SCREENS.includes(state.screen);
 
   return (
     <div style={{ display: "flex", height: "100dvh", width: "100%", background: colors.bg }}>
       <Sidebar />
 
       <main style={{ flex: 1, position: "relative", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <div className="scr" style={{ flex: 1, overflowY: "auto" }}>
+        <PullToRefresh enabled={refreshable} onRefresh={actions.refresh} className="scr">
           <div style={{ maxWidth: 760, margin: "0 auto", width: "100%", padding: "16px 12px 32px" }}>
             {!tabbed && <BackBar />}
             {children}
           </div>
-        </div>
+        </PullToRefresh>
         <Toast />
       </main>
     </div>

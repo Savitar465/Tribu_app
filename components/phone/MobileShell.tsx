@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
+import { PullToRefresh } from "@/components/PullToRefresh";
 import { useApp } from "@/lib/store";
-import { FAB_SCREENS, TABBED_SCREENS } from "@/lib/navigation";
+import { FAB_SCREENS, REFRESHABLE_SCREENS, TABBED_SCREENS } from "@/lib/navigation";
 import { colors } from "@/lib/theme";
 import { BackBar } from "./BackBar";
 import { BottomNav } from "./BottomNav";
@@ -12,9 +13,10 @@ import { Toast } from "./Toast";
  * and sits on the page backdrop on tablets. Bottom tab bar + FAB, safe-area aware.
  */
 export function MobileShell({ children }: { children: ReactNode }) {
-  const { state } = useApp();
+  const { state, actions } = useApp();
   const tabbed = TABBED_SCREENS.includes(state.screen);
   const showFab = FAB_SCREENS.includes(state.screen);
+  const refreshable = REFRESHABLE_SCREENS.includes(state.screen);
 
   return (
     <div
@@ -36,9 +38,9 @@ export function MobileShell({ children }: { children: ReactNode }) {
 
       {!tabbed && <BackBar />}
 
-      <div className="scr" style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
+      <PullToRefresh enabled={refreshable} onRefresh={actions.refresh} className="scr">
         {children}
-      </div>
+      </PullToRefresh>
 
       <Toast />
       {showFab && <Fab />}

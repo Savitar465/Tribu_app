@@ -162,7 +162,8 @@ type Action =
   | { type: "applyDeleteGroup"; groupId: string }
   | { type: "applyBilledCycle"; groupId: string; cycle: string; cuota: number }
   | { type: "setNotifications"; notifications: NotificationRow[] }
-  | { type: "markNotificationsRead" };
+  | { type: "markNotificationsRead" }
+  | { type: "hydrate"; data: AppData };
 
 function flash(state: State, msg: string): State {
   return { ...state, toast: msg, toastKey: state.toastKey + 1 };
@@ -521,6 +522,24 @@ function reducer(state: State, action: Action): State {
       );
       return { ...state, groups };
     }
+    // Replace the whole synced dataset with a fresh fetch (pull-to-refresh /
+    // web refresh button), keeping navigation, drafts and the open group.
+    case "hydrate": {
+      const d = action.data;
+      const agId = d.groups.some((g) => g.id === state.agId) ? state.agId : (d.groups[0]?.id ?? null);
+      return {
+        ...state,
+        profile: d.profile,
+        groups: d.groups,
+        participants: d.participants,
+        payments: d.payments,
+        charges: d.charges,
+        wallet: d.wallet,
+        transactions: d.transactions,
+        notifications: d.notifications,
+        agId,
+      };
+    }
     case "setNotifications":
       return { ...state, notifications: action.notifications };
     case "markNotificationsRead":
@@ -645,6 +664,8 @@ export interface Actions {
   processBilling: () => void;
   /** Mark the whole notification feed as read (on opening the activity screen). */
   markActivityRead: () => void;
+  /** Re-fetch the full dataset from Supabase (pull-to-refresh / web refresh). */
+  refresh: () => Promise<void>;
   signOut: () => void;
 }
 
@@ -1601,6 +1622,17 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
         dispatch({ type: "markNotificationsRead" }); // optimistic
         try {
           await api.markNotificationsRead(supabase, userId);
+        } catch (e) {
+          fail(e);
+        }
+      },
+
+      // Pull-to-refresh / web refresh: re-fetch everything and replace the
+      // synced dataset in one commit.
+      refresh: async () => {
+        try {
+          const data = await api.fetchAppData(supabase, userId);
+          dispatch({ type: "hydrate", data });
         } catch (e) {
           fail(e);
         }

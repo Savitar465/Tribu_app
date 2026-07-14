@@ -152,6 +152,16 @@ export function GearIcon({ size = 18, color = "#cfd4de", style }: IconProps) {
   );
 }
 
+/** Circular refresh arrows (pull-to-refresh indicator + web refresh button). */
+export function RefreshIcon({ size = 18, color = "#cfd4de", style }: IconProps) {
+  return (
+    <svg {...base(size, color, style)} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+      <path d="M21 3v6h-6" />
+    </svg>
+  );
+}
+
 /** Right-pointing chevron (indicator). Uses a 8×14 art box. */
 export function ChevronRight({ size = 14, color = "#69707f", style }: IconProps) {
   return (

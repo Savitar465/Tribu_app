@@ -6,6 +6,21 @@ export const TABBED_SCREENS: Screen[] = ["home", "dashboard", "wallet", "notific
 /** Screens that show the floating "create group" action button. */
 export const FAB_SCREENS: Screen[] = ["home", "dashboard"];
 
+/** Screens whose data can be re-fetched: pull-to-refresh on touch, a refresh
+ * button on the web. */
+export const REFRESHABLE_SCREENS: Screen[] = [
+  "home",
+  "paycombined",
+  "wallet",
+  "notifications",
+  "admin",
+  "approve",
+  "dashboard",
+  "group",
+  "history",
+  "qr",
+];
+
 /** Where the back button leads from each non-tabbed screen. */
 export const BACK_MAP: Partial<Record<Screen, Screen>> = {
   group: "home",
