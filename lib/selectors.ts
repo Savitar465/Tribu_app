@@ -216,10 +216,12 @@ export function getMembers(state: State, accent: string) {
     // billed, exactly like the viewer's own cuota in `buildGroup`, so the
     // roster never contradicts the "Tu cuota de este mes" figure.
     const per = memberPer(state, row, m, g.defaultPerBs);
-    // "You" is the viewer's own roster row, NOT the owner's `is_self` row:
-    // that one is stored with the literal name "Tú" and belongs to the admin,
-    // so other members must see it as the administrator's, never as theirs.
+    // "You" is the viewer's own roster row, NOT the owner's row: that one is
+    // stored with the literal name "Tú" and belongs to the admin, so other
+    // members must see it as the administrator's, never as theirs. The owner's
+    // row is spotted by user_id too — older rows may predate the is_self flag.
     const mine = m.user_id != null && m.user_id === state.profile.id;
+    const ownerRow = m.is_self || m.user_id === row.owner_id;
     const hideDetails = !g.owned && !mine;
     const customLabel =
       m.custom_pct != null
@@ -231,10 +233,10 @@ export function getMembers(state: State, accent: string) {
       id: m.id,
       isSelf: m.is_self,
       name: mine
-        ? m.is_self
+        ? ownerRow
           ? m.name // the owner's own row is already stored as "Tú"
           : `${m.name} (tú)`
-        : m.is_self
+        : ownerRow
           ? "Administrador"
           : m.name,
       sub: hideDetails
