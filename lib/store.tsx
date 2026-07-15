@@ -17,7 +17,7 @@ import { MEMBER_COLORS, SERVICE_META } from "@/lib/data";
 import { getOfficialRate } from "@/lib/rates";
 import { fmtBs, sanitizeNumeric } from "@/lib/format";
 import { BACK_MAP } from "@/lib/navigation";
-import { checkCustomPrice, checkCustomPct, memberCuotaBs, memberCuotaFromPct } from "@/lib/paylogic";
+import { checkCustomPrice, checkCustomPct, imageUploadError, memberCuotaBs, memberCuotaFromPct } from "@/lib/paylogic";
 import { buildGroup, currentCycle, cycleLabel, getEditErrors, getMemberCuota } from "@/lib/selectors";
 import type { Currency, Screen, ServiceId } from "@/lib/types";
 
@@ -698,13 +698,6 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
     const round2 = (n: number) => Math.round(n * 100) / 100;
     // Current per-member cuota (Bs): frozen after this month's charge, else today's preview.
     const cuotaOf = (g: GroupRow) => buildGroup(ref.current, g).perBs;
-    // Shared guard for image uploads (QR / receipts): null when acceptable.
-    const imageError = (file: File) =>
-      !/^image\/(png|jpe?g|webp)$/.test(file.type)
-        ? "Solo imágenes JPG, PNG o WebP"
-        : file.size > 5 * 1024 * 1024
-          ? "La imagen supera los 5 MB"
-          : null;
     const currentGroup = () => ref.current.groups.find((g) => g.id === ref.current.agId) ?? ref.current.groups[0];
 
     // Fetch the official BCB "compra" rate for display and adopt it (always when
@@ -814,7 +807,7 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
       setGroupQr: async (file) => {
         const g = currentGroup();
         if (!g) return false;
-        const err = imageError(file);
+        const err = imageUploadError(file);
         if (err) {
           dispatch({ type: "flash", msg: err });
           return false;
@@ -892,7 +885,7 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
         const g = currentGroup();
         if (!g) return;
         if (proof) {
-          const err = imageError(proof);
+          const err = imageUploadError(proof);
           if (err) {
             dispatch({ type: "flash", msg: err });
             return;
@@ -938,7 +931,7 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
       // whole payment is registered instantly: no receipt, no review.
       submitCombinedPay: async (ownerId, proof, sel) => {
         if (proof) {
-          const err = imageError(proof);
+          const err = imageUploadError(proof);
           if (err) {
             dispatch({ type: "flash", msg: err });
             return;
@@ -1100,7 +1093,7 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
           return;
         }
         if (proof) {
-          const err = imageError(proof);
+          const err = imageUploadError(proof);
           if (err) {
             dispatch({ type: "flash", msg: err });
             return;
