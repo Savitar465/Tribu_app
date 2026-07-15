@@ -7,6 +7,7 @@ import { IconBadge } from "@/components/ui/IconBadge";
 import { SectionLabel } from "@/components/ui/SectionLabel";
 import { UploadIcon } from "@/components/ui/Icons";
 import { fmtBs } from "@/lib/format";
+import { imageUploadError } from "@/lib/paylogic";
 import { getCombinedPay } from "@/lib/selectors";
 import { useApp } from "@/lib/store";
 import { colors } from "@/lib/theme";
@@ -52,8 +53,15 @@ export function PayCombinedScreen() {
     setPrepayMonths(1);
   };
 
+  // Reject bad receipts at pick time (wrong type, empty, over 5 MB) so the
+  // user isn't surprised at send — `accept` alone doesn't filter drag & drop.
   const pick = (file: File | null) => {
     if (!file) return;
+    const err = imageUploadError(file);
+    if (err) {
+      actions.notify(err);
+      return;
+    }
     if (preview) URL.revokeObjectURL(preview);
     setProof(file);
     setPreview(URL.createObjectURL(file));

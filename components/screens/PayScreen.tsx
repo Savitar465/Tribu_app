@@ -6,6 +6,7 @@ import { ChevronRight, CreditCardIcon, GlobeIcon, QrIcon, UploadIcon } from "@/c
 import { IconBadge } from "@/components/ui/IconBadge";
 import { SectionLabel } from "@/components/ui/SectionLabel";
 import { fmtBs } from "@/lib/format";
+import { imageUploadError } from "@/lib/paylogic";
 import {
   getAdvancePreview,
   getCurrentGroup,
@@ -62,8 +63,15 @@ export function PayScreen() {
         ? fmtBs(Math.round(group.perBs * (isPrepay ? months : 1) * 100) / 100)
         : "—";
 
+  // Reject bad receipts at pick time (wrong type, empty, over 5 MB) so the
+  // user isn't surprised at send — `accept` alone doesn't filter drag & drop.
   const pick = (file: File | null) => {
     if (!file) return;
+    const err = imageUploadError(file);
+    if (err) {
+      actions.notify(err);
+      return;
+    }
     if (preview) URL.revokeObjectURL(preview);
     setProof(file);
     setPreview(URL.createObjectURL(file));

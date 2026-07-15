@@ -38,6 +38,28 @@ export interface OwnerDebtBundle {
   total: number;
 }
 
+/** The fields of a picked upload this module needs (structural `File`). */
+export interface FileLike {
+  type: string;
+  size: number;
+}
+
+/** Largest image accepted for a payment receipt or QR upload. */
+export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Shared guard for image uploads (payment receipts / QR codes): a user-facing
+ * error message, or null when the file is acceptable. The `accept` attribute
+ * on file inputs is advisory only — drag & drop and some mobile pickers ignore
+ * it, so every upload is checked here too.
+ */
+export function imageUploadError(file: FileLike): string | null {
+  if (!/^image\/(png|jpe?g|webp)$/.test(file.type)) return "Solo imágenes JPG, PNG o WebP";
+  if (file.size === 0) return "El archivo está vacío o dañado";
+  if (file.size > MAX_IMAGE_BYTES) return "La imagen supera los 5 MB";
+  return null;
+}
+
 /**
  * Group the signed-in user's unpaid charges by the administrator who collects
  * them. Bundles are ordered by total owed (largest first); cycles oldest first.

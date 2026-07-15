@@ -6,6 +6,8 @@ import {
   checkCustomPrice,
   debtsByOwner,
   memberCuotaBs,
+  imageUploadError,
+  MAX_IMAGE_BYTES,
   nextCycle,
   type ChargeLike,
   type GroupLike,
@@ -178,4 +180,17 @@ test("checkCustomPrice tolerates only the excess rounding can add", () => {
   };
   assert.equal(checkCustomPrice({ ...base, newPerBs: 17 }).ok, true);
   assert.equal(checkCustomPrice({ ...base, newPerBs: 22 }).ok, false);
+});
+
+test("imageUploadError accepts JPG/PNG/WebP under 5 MB and rejects the rest", () => {
+  assert.equal(imageUploadError({ type: "image/jpeg", size: 1024 }), null);
+  assert.equal(imageUploadError({ type: "image/jpg", size: 1024 }), null);
+  assert.equal(imageUploadError({ type: "image/png", size: MAX_IMAGE_BYTES }), null);
+  assert.equal(imageUploadError({ type: "image/webp", size: 1 }), null);
+  // Wrong type wins over any size problem.
+  assert.equal(imageUploadError({ type: "application/pdf", size: 1024 }), "Solo imágenes JPG, PNG o WebP");
+  assert.equal(imageUploadError({ type: "image/gif", size: 1024 }), "Solo imágenes JPG, PNG o WebP");
+  assert.equal(imageUploadError({ type: "", size: 0 }), "Solo imágenes JPG, PNG o WebP");
+  assert.equal(imageUploadError({ type: "image/png", size: 0 }), "El archivo está vacío o dañado");
+  assert.equal(imageUploadError({ type: "image/png", size: MAX_IMAGE_BYTES + 1 }), "La imagen supera los 5 MB");
 });

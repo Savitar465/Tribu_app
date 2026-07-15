@@ -4,6 +4,7 @@ import { Card } from "@/components/ui/Card";
 import { QrIcon, UploadIcon } from "@/components/ui/Icons";
 import { IconBadge } from "@/components/ui/IconBadge";
 import { TextField } from "@/components/ui/TextField";
+import { imageUploadError } from "@/lib/paylogic";
 import { useApp } from "@/lib/store";
 import { colors } from "@/lib/theme";
 import type { GroupView } from "@/lib/types";
@@ -41,8 +42,15 @@ export function PayMethodsEditor({ group }: { group: GroupView }) {
     setOpen(!open);
   };
 
+  // Reject bad images at pick time (wrong type, empty, over 5 MB) — the
+  // `accept` attribute alone doesn't filter drag & drop.
   const pick = (file: File | null) => {
     if (!file) return;
+    const err = imageUploadError(file);
+    if (err) {
+      actions.notify(err);
+      return;
+    }
     if (preview) URL.revokeObjectURL(preview);
     setDraft(file);
     setPreview(URL.createObjectURL(file));
