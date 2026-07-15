@@ -379,6 +379,10 @@ export function getMyArrears(state: State, groupId: string) {
 export function payerLabel(state: State, groupId: string, payerId: string | null) {
   if (!payerId) return null;
   if (payerId === state.profile.id) return "ti";
+  // The owner's roster row is stored with the literal name "Tú" (it reads
+  // right only on the admin's own screen), so name the role instead.
+  const g = state.groups.find((x) => x.id === groupId);
+  if (g && payerId === g.owner_id) return "el administrador";
   const p = state.participants.find((x) => x.group_id === groupId && x.user_id === payerId);
   return p?.name ?? "otro miembro";
 }
