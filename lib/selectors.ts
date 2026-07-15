@@ -212,19 +212,10 @@ export function getMembers(state: State, accent: string) {
   if (!g || !row) return [];
   return participantsOf(state, g.id).map((m) => {
     // What the member pays each month: percentage of total, fixed custom
-    // price, or the group's default split.
-    const totalBs = row.currency === "USD" ? row.amount * state.profile.exchange_rate : row.amount;
-    const per =
-      m.custom_pct != null
-        ? memberCuotaFromPct(m.custom_pct, totalBs, row.round_cuota)
-        : m.custom_amount != null
-          ? memberCuotaBs(
-              m.custom_amount,
-              m.custom_currency ?? row.currency,
-              state.profile.exchange_rate,
-              row.round_cuota,
-            )
-          : g.defaultPerBs;
+    // price, or the group's default split — frozen at this month's charge once
+    // billed, exactly like the viewer's own cuota in `buildGroup`, so the
+    // roster never contradicts the "Tu cuota de este mes" figure.
+    const per = memberPer(state, row, m, g.defaultPerBs);
     const hideDetails = !g.owned && !m.is_self;
     const customLabel =
       m.custom_pct != null
