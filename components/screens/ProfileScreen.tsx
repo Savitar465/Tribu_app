@@ -23,8 +23,11 @@ export function ProfileScreen() {
   const [pushOn, setPushOn] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
   useEffect(() => {
-    setPushAvailable(pushSupported());
-    getPushSubscription().then((sub) => setPushOn(sub != null && Notification.permission === "granted"));
+    if (!pushSupported()) return;
+    getPushSubscription().then((sub) => {
+      setPushAvailable(true);
+      setPushOn(sub != null && Notification.permission === "granted");
+    });
   }, []);
 
   const togglePush = async (value: boolean) => {
