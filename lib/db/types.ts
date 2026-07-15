@@ -139,6 +139,14 @@ export interface WalletTxRow {
   created_at: string;
 }
 
+/** Minimal profile of a group owner the user shares a group with (via the
+ * get_group_owner_profiles RPC — profiles RLS is owner-only). */
+export interface OwnerProfileRow {
+  id: string;
+  full_name: string | null;
+  mono: string | null;
+}
+
 /** Everything the app needs for the signed-in user, fetched on load. */
 export interface AppData {
   profile: ProfileRow;
@@ -149,4 +157,6 @@ export interface AppData {
   wallet: WalletRow;
   transactions: WalletTxRow[];
   notifications: NotificationRow[];
+  /** Display names of the owners of the user's groups. */
+  ownerProfiles: OwnerProfileRow[];
 }

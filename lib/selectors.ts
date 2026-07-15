@@ -114,7 +114,6 @@ export function buildGroup(state: State, group: GroupRow): GroupView {
     usdNote: k.isUsd ? `≈ ${fmtUsd(group.amount / group.members_target)}/persona · cobrado en USD` : "",
     isUsd: k.isUsd,
     perBs: myPer,
-    myPct: myRow?.custom_pct ?? null,
     defaultPerBs: k.per,
     totalBs: k.totalBs,
     qrImageUrl: group.qr_image_url,
@@ -219,26 +218,35 @@ export function getMembers(state: State, accent: string) {
     const per = memberPer(state, row, m, g.defaultPerBs);
     // "You" is the viewer's own roster row, NOT the owner's row: that one is
     // stored with the literal name "Tú" and belongs to the admin, so other
-    // members must see it as the administrator's, never as theirs. The owner's
-    // row is spotted by user_id too — older rows may predate the is_self flag.
+    // members see it under the owner's real profile name. The owner's row is
+    // spotted by user_id too — older rows may predate the is_self flag.
     const mine = m.user_id != null && m.user_id === state.profile.id;
     const ownerRow = m.is_self || m.user_id === row.owner_id;
+    // Fellow members' money figures (cuota, saldo, custom price) are private
+    // to the admin — other viewers only get the name and paid/pending status.
     const hideDetails = !g.owned && !mine;
+    // Percentage-based pricing is an admin concept: members see only the
+    // resulting amount, never the percentage.
     const customLabel =
       m.custom_pct != null
-        ? `${m.custom_pct}% · ${fmtBs(per)}`
+        ? g.owned
+          ? `${m.custom_pct}% · ${fmtBs(per)}`
+          : `Cuota propia: ${fmtBs(per)}`
         : m.custom_amount != null
           ? `Cuota propia: ${fmtBs(per)}`
           : "";
+    const ownerName = state.ownerProfiles.find((o) => o.id === row.owner_id)?.full_name;
     return {
       id: m.id,
       isSelf: m.is_self,
+      /** Owner rows get a crown icon in the roster. */
+      owner: ownerRow,
       name: mine
         ? ownerRow
           ? m.name // the owner's own row is already stored as "Tú"
           : `${m.name} (tú)`
         : ownerRow
-          ? "Administrador"
+          ? ownerName || "Administrador"
           : m.name,
       sub: hideDetails
         ? (m.email ?? "")
@@ -261,7 +269,7 @@ export function getMembers(state: State, accent: string) {
       /** The member's effective monthly cuota in Bs (feeds the admin's donut). */
       cuotaBs: per,
       paid: m.paid,
-      stLabel: hideDetails ? "" : m.paid ? "Pagado" : m.proof_pending ? "En revisión" : "Pendiente",
+      stLabel: m.paid ? "Pagado" : m.proof_pending ? "En revisión" : "Pendiente",
       stColor: m.paid ? "#36d07a" : m.proof_pending ? "#7ba6ff" : "#f5b53d",
       stBg: m.paid ? "rgba(54,208,122,0.14)" : m.proof_pending ? "rgba(123,166,255,0.14)" : "rgba(245,181,61,0.14)",
     };

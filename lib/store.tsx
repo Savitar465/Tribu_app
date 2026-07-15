@@ -12,7 +12,7 @@ import {
 import { createClient } from "@/utils/supabase/client";
 import * as api from "@/lib/db/api";
 import type { ProfileMatch } from "@/lib/db/api";
-import type { AppData, ChargeRow, GroupPaymentRow, GroupRow, NotificationRow, ParticipantRow, WalletTxRow } from "@/lib/db/types";
+import type { AppData, ChargeRow, GroupPaymentRow, GroupRow, NotificationRow, OwnerProfileRow, ParticipantRow, WalletTxRow } from "@/lib/db/types";
 import { MEMBER_COLORS, SERVICE_META } from "@/lib/data";
 import { getOfficialRate } from "@/lib/rates";
 import { fmtBs, sanitizeNumeric } from "@/lib/format";
@@ -32,6 +32,8 @@ export interface State {
   wallet: AppData["wallet"];
   transactions: WalletTxRow[];
   notifications: NotificationRow[];
+  /** Display names of the owners of the user's groups. */
+  ownerProfiles: OwnerProfileRow[];
 
   // --- navigation ---
   screen: Screen;
@@ -82,6 +84,7 @@ function initState(data: AppData): State {
     wallet: data.wallet,
     transactions: data.transactions,
     notifications: data.notifications,
+    ownerProfiles: data.ownerProfiles,
     screen: "home",
     agId: data.groups[0]?.id ?? null,
     selService: "spotify",
@@ -544,6 +547,7 @@ function reducer(state: State, action: Action): State {
         wallet: d.wallet,
         transactions: d.transactions,
         notifications: d.notifications,
+        ownerProfiles: d.ownerProfiles,
         agId,
       };
     }

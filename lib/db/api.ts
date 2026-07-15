@@ -6,6 +6,7 @@ import type {
   GroupPaymentRow,
   GroupRow,
   NotificationRow,
+  OwnerProfileRow,
   ParticipantRow,
   ProfileRow,
   WalletRow,
@@ -26,7 +27,7 @@ function must<T>(data: T | null, error: { message: string } | null, what: string
 
 /** Fetch the full app dataset for a user in parallel. */
 export async function fetchAppData(supabase: SupabaseClient, userId: string): Promise<AppData> {
-  const [profile, groups, participants, payments, charges, wallet, transactions, notifications] = await Promise.all([
+  const [profile, groups, participants, payments, charges, wallet, transactions, notifications, ownerProfiles] = await Promise.all([
     supabase.from("profiles").select("*").eq("id", userId).single(),
     supabase.from("groups").select("*").order("created_at", { ascending: true }),
     supabase.from("group_participants").select("*").order("sort", { ascending: true }),
@@ -35,6 +36,7 @@ export async function fetchAppData(supabase: SupabaseClient, userId: string): Pr
     supabase.from("wallets").select("*").eq("user_id", userId).single(),
     supabase.from("wallet_transactions").select("*").order("created_at", { ascending: false }),
     supabase.from("notifications").select("*").order("created_at", { ascending: false }).limit(50),
+    supabase.rpc("get_group_owner_profiles"),
   ]);
 
   return {
@@ -46,6 +48,7 @@ export async function fetchAppData(supabase: SupabaseClient, userId: string): Pr
     wallet: must<WalletRow>(wallet.data, wallet.error, "wallet"),
     transactions: must<WalletTxRow[]>(transactions.data, transactions.error, "transactions"),
     notifications: must<NotificationRow[]>(notifications.data, notifications.error, "notifications"),
+    ownerProfiles: must<OwnerProfileRow[]>(ownerProfiles.data, ownerProfiles.error, "ownerProfiles"),
   };
 }
 

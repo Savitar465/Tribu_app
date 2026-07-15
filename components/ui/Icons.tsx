@@ -60,6 +60,14 @@ export function UserIcon({ size = 22, color = "currentColor", style }: IconProps
   );
 }
 
+export function CrownIcon({ size = 13, color = "#f5b53d", style }: IconProps) {
+  return (
+    <svg {...base(size, color, style)}>
+      <path d="M3 18h18M4 18 3 7l5.5 4L12 4l3.5 7L21 7l-1 11" />
+    </svg>
+  );
+}
+
 export function QrIcon({ size = 19, color = "#7ba6ff", style }: IconProps) {
   return (
     <svg {...base(size, color, style)}>

@@ -1,4 +1,5 @@
 import { colors } from "@/lib/theme";
+import { CrownIcon } from "./Icons";
 import { StatusBadge } from "./StatusBadge";
 import { initials } from "./Avatar";
 
@@ -8,6 +9,8 @@ interface MemberRowProps {
   stLabel: string;
   stColor: string;
   stBg: string;
+  /** Marks the group owner's row with a crown next to the name. */
+  owner?: boolean;
   /** Optional secondary line under the name (e.g. email). */
   sub?: string;
   /** Hide the divider on the last row. */
@@ -50,6 +53,7 @@ export function MemberRow({
   stLabel,
   stColor,
   stBg,
+  owner,
   sub,
   last,
   onTogglePaid,
@@ -139,7 +143,14 @@ export function MemberRow({
             }}
           />
         ) : (
-          <div style={{ fontSize: 14.5, fontWeight: 600, color: colors.textPrimary }}>{name}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 14.5, fontWeight: 600, color: colors.textPrimary }}>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
+            {owner && (
+              <span title="Administrador del grupo" aria-label="Administrador del grupo" style={{ display: "inline-flex", flexShrink: 0 }}>
+                <CrownIcon />
+              </span>
+            )}
+          </div>
         )}
         {sub && (
           <div

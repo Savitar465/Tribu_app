@@ -481,6 +481,28 @@ $$;
 revoke execute on function public.search_profiles(text) from public, anon;
 grant execute on function public.search_profiles(text) to authenticated;
 
+-- Minimal profile of every group owner the caller shares a group with (as
+-- that group's owner or as a linked roster member) — lets the roster name
+-- the admin instead of showing their row's literal "Tú".
+create or replace function public.get_group_owner_profiles()
+returns table (id uuid, full_name text, mono text)
+language sql
+security definer
+set search_path = ''
+as $$
+  select distinct p.id, p.full_name, p.mono
+  from public.profiles p
+  join public.groups g on g.owner_id = p.id
+  where g.owner_id = auth.uid()
+     or exists (
+       select 1 from public.group_participants gp
+       where gp.group_id = g.id and gp.user_id = auth.uid()
+     );
+$$;
+
+revoke execute on function public.get_group_owner_profiles() from public, anon;
+grant execute on function public.get_group_owner_profiles() to authenticated;
+
 -- ---------------------------------------------------------------------------
 -- submit_payment_v2: submit one payment covering one or many participants
 -- (possibly across groups), atomically. Each item pays a participant's listed
