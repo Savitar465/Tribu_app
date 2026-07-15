@@ -1417,13 +1417,16 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
               newPct: pctVal,
               editedId: participantId,
               roster: ref.current.participants.filter((x) => x.group_id === group.id),
+              groupCurrency: group.currency,
               totalBs: view.totalBs,
+              defaultPerBs: view.defaultPerBs,
+              rate: rate(),
               round: group.round_cuota,
             });
             if (!check.ok) {
               dispatch({
                 type: "flash",
-                msg: `El porcentaje (${pctVal}%) supera el disponible: ${check.remainingPct.toFixed(1)}%`,
+                msg: `El porcentaje (${pctVal}%) supera el disponible: los demás miembros usan ${check.othersPct.toFixed(1)}% y queda ${check.remainingPct.toFixed(1)}% (${fmtBs(check.remainingBs)})`,
               });
               return false;
             }

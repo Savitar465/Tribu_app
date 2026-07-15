@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   advanceCoverage,
   buildChargesCsv,
+  checkCustomPct,
   checkCustomPrice,
   debtsByOwner,
   memberCuotaBs,
@@ -178,4 +179,77 @@ test("checkCustomPrice tolerates only the excess rounding can add", () => {
   };
   assert.equal(checkCustomPrice({ ...base, newPerBs: 17 }).ok, true);
   assert.equal(checkCustomPrice({ ...base, newPerBs: 22 }).ok, false);
+});
+
+test("checkCustomPct counts other members' amounts and default splits, not just percentages", () => {
+  // 100 Bs plan, 4 slots: one member at 30%, one at a fixed 20 Bs, one on the
+  // default split (25 Bs). Others consume 75% → 25% remains for the edited one.
+  const roster = [
+    { id: "edited", custom_amount: null, custom_currency: null, custom_pct: null },
+    { id: "pct", custom_amount: null, custom_currency: null, custom_pct: 30 },
+    { id: "fixed", custom_amount: 20, custom_currency: "BOB" as const, custom_pct: null },
+    { id: "default", custom_amount: null, custom_currency: null, custom_pct: null },
+  ];
+  const base = {
+    editedId: "edited",
+    roster,
+    groupCurrency: "BOB" as const,
+    totalBs: 100,
+    defaultPerBs: 25,
+    rate: 10,
+    round: false,
+  };
+  const at25 = checkCustomPct({ ...base, newPct: 25 });
+  assert.equal(at25.othersPct, 75);
+  assert.equal(at25.remainingPct, 25);
+  assert.equal(at25.remainingBs, 25);
+  assert.equal(at25.resultBs, 25);
+  assert.equal(at25.ok, true);
+  assert.equal(checkCustomPct({ ...base, newPct: 26 }).ok, false);
+});
+
+test("checkCustomPct converts USD amounts and reports remaining with pct 0", () => {
+  // 200 Bs plan, one other member with a 5 USD custom price at rate 10 → 50 Bs
+  // (25%). With no draft yet (pct 0) the editor still learns what's left.
+  const roster = [
+    { id: "edited", custom_amount: null, custom_currency: null, custom_pct: null },
+    { id: "usd", custom_amount: 5, custom_currency: "USD" as const, custom_pct: null },
+  ];
+  const info = checkCustomPct({
+    newPct: 0,
+    editedId: "edited",
+    roster,
+    groupCurrency: "BOB",
+    totalBs: 200,
+    defaultPerBs: 100,
+    rate: 10,
+    round: false,
+  });
+  assert.equal(info.othersPct, 25);
+  assert.equal(info.remainingPct, 75);
+  assert.equal(info.remainingBs, 150);
+  assert.equal(info.ok, true);
+});
+
+test("checkCustomPct tolerates only the excess rounding can add", () => {
+  // 100 Bs / 3 slots with rounding: the two other default-split members are
+  // rounded to 34 Bs each (68%). 32% → 32 Bs fits; 40% → 40 Bs exceeds the
+  // 3 Bs round-up allowance.
+  const roster = Array.from({ length: 3 }, (_, i) => ({
+    id: `m${i}`,
+    custom_amount: null,
+    custom_currency: null,
+    custom_pct: null,
+  }));
+  const base = {
+    editedId: "m0",
+    roster,
+    groupCurrency: "BOB" as const,
+    totalBs: 100,
+    defaultPerBs: 34,
+    rate: 10,
+    round: true,
+  };
+  assert.equal(checkCustomPct({ ...base, newPct: 32 }).ok, true);
+  assert.equal(checkCustomPct({ ...base, newPct: 40 }).ok, false);
 });
