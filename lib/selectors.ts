@@ -216,7 +216,11 @@ export function getMembers(state: State, accent: string) {
     // billed, exactly like the viewer's own cuota in `buildGroup`, so the
     // roster never contradicts the "Tu cuota de este mes" figure.
     const per = memberPer(state, row, m, g.defaultPerBs);
-    const hideDetails = !g.owned && !m.is_self;
+    // "You" is the viewer's own roster row, NOT the owner's `is_self` row:
+    // that one is stored with the literal name "Tú" and belongs to the admin,
+    // so other members must see it as the administrator's, never as theirs.
+    const mine = m.user_id != null && m.user_id === state.profile.id;
+    const hideDetails = !g.owned && !mine;
     const customLabel =
       m.custom_pct != null
         ? `${m.custom_pct}% · ${fmtBs(per)}`
@@ -226,7 +230,13 @@ export function getMembers(state: State, accent: string) {
     return {
       id: m.id,
       isSelf: m.is_self,
-      name: m.name,
+      name: mine
+        ? m.is_self
+          ? m.name // the owner's own row is already stored as "Tú"
+          : `${m.name} (tú)`
+        : m.is_self
+          ? "Administrador"
+          : m.name,
       sub: hideDetails
         ? (m.email ?? "")
         : [
@@ -236,7 +246,7 @@ export function getMembers(state: State, accent: string) {
           ]
             .filter(Boolean)
             .join(" · "),
-      av: m.is_self ? accent : m.color,
+      av: mine ? accent : m.color,
       /** Admin-set price override (null = default split). */
       customAmount: m.custom_amount,
       /** Currency the custom price is defined in (null = the group's currency). */
