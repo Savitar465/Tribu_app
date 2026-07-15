@@ -112,6 +112,11 @@ export function GroupScreen() {
           <div style={{ fontSize: 44, fontWeight: 800, letterSpacing: -1.5, color: colors.textPrimary, margin: "4px 0 8px" }}>
             {group.cuota}
           </div>
+          {group.myPct != null && (
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: colors.textMuted, marginBottom: 8 }}>
+              {group.myPct}% del total del grupo ({group.monthly})
+            </div>
+          )}
           <StatusBadge label={st.label} bg={st.bg} color={st.color} style={{ padding: "5px 14px", fontSize: 13 }} />
           <div style={{ fontSize: 12.5, color: colors.textMuted, marginTop: 12 }}>Vence el {group.due}/2026</div>
           {prepaid && prepaid.pendingAmount != null && (

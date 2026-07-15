@@ -15,18 +15,24 @@ export interface CuotaSlice {
 
 /** Donut of each member's monthly cuota (admin panel). Identity is never
  * color-alone: every slice is named in the legend with its amount and share,
- * and a 2px surface gap separates adjacent slices. */
-export function CuotaDonut({ slices }: { slices: CuotaSlice[] }) {
+ * and a 2px surface gap separates adjacent slices. When `totalBs` (the
+ * group's monthly total) is given, each share is a percentage of THAT total —
+ * stable when another member's price changes — and any unassigned remainder
+ * shows as an empty stretch of the ring. */
+export function CuotaDonut({ slices, totalBs }: { slices: CuotaSlice[]; totalBs?: number }) {
   const data = slices.filter((s) => s.value > 0);
   const total = data.reduce((a, s) => a + s.value, 0);
   if (data.length === 0 || total <= 0) return null;
+  // Percentages (and arc lengths) are relative to the group total when known;
+  // custom prices may over-collect, so the denominator never shrinks below the sum.
+  const denom = Math.max(total, totalBs ?? 0);
 
   const R = 44; // ring radius
   const W = 22; // ring thickness
   const C = 2 * Math.PI * R;
   const gap = data.length > 1 ? 2 : 0; // surface gap between slices (px along the arc)
 
-  const lens = data.map((s) => (s.value / total) * C);
+  const lens = data.map((s) => (s.value / denom) * C);
   const segs = data.map((s, i) => ({
     ...s,
     len: lens[i],
@@ -49,6 +55,10 @@ export function CuotaDonut({ slices }: { slices: CuotaSlice[] }) {
         >
           {/* Slices start at 12 o'clock and run clockwise. */}
           <g transform="rotate(-90 60 60)">
+            {/* Faint track: the stretch no slice covers is unassigned share. */}
+            {total < denom && (
+              <circle cx={60} cy={60} r={R} fill="none" stroke={colors.hairline} strokeWidth={W} />
+            )}
             {segs.map((s) => (
               <circle
                 key={s.id}
@@ -61,7 +71,7 @@ export function CuotaDonut({ slices }: { slices: CuotaSlice[] }) {
                 strokeDasharray={`${Math.max(0.5, s.len - gap)} ${C}`}
                 strokeDashoffset={-s.off}
               >
-                <title>{`${s.name} · ${s.label} · ${pct(s.value, total)}`}</title>
+                <title>{`${s.name} · ${s.label} · ${pct(s.value, denom)}`}</title>
               </circle>
             ))}
           </g>
@@ -123,7 +133,7 @@ export function CuotaDonut({ slices }: { slices: CuotaSlice[] }) {
                   flexShrink: 0,
                 }}
               >
-                {pct(s.value, total)}
+                {pct(s.value, denom)}
               </span>
             </div>
           ))}

@@ -1410,7 +1410,10 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
               newPct: pctVal,
               editedId: participantId,
               roster: ref.current.participants.filter((x) => x.group_id === group.id),
+              groupCurrency: group.currency,
               totalBs: view.totalBs,
+              defaultPerBs: view.defaultPerBs,
+              rate: rate(),
               round: group.round_cuota,
             });
             if (!check.ok) {

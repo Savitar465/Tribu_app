@@ -15,7 +15,7 @@ import { CostEditor } from "@/components/screens/admin/CostEditor";
 import { CuotaDonut } from "@/components/screens/admin/CuotaDonut";
 import { PayMethodsEditor } from "@/components/screens/admin/PayMethodsEditor";
 import { fmtBs, sanitizeNumeric } from "@/lib/format";
-import { assignedPct, checkCustomPct, checkCustomPrice, memberCuotaBs, memberCuotaFromPct } from "@/lib/paylogic";
+import { assignedPct, checkCustomPct, checkCustomPrice, memberCuotaBs } from "@/lib/paylogic";
 import { getApprovals, getCurrentGroup, getGroupArrears, getGroups, getMembers } from "@/lib/selectors";
 import { useApp } from "@/lib/store";
 import { ACCENT, colors } from "@/lib/theme";
@@ -47,9 +47,13 @@ export function AdminScreen() {
     (p) => p.group_id === group.id && p.user_id === state.profile.id,
   );
 
-  // Donut slices: each roster member's monthly cuota (in their roster color),
-  // plus a neutral slice for unfilled slots still charged at the default split.
+  // Donut slices: each roster member's monthly cuota (in their roster color).
+  // Percentages are relative to the group's monthly total, so editing one
+  // member's price never shifts the others' shares. Unfilled slots take
+  // whatever the roster leaves of the total (the remaining percentage).
   const freeSlots = Math.max(0, parseInt(group.members, 10) - members.length);
+  const memberSumBs = members.reduce((a, m) => a + m.cuotaBs, 0);
+  const remainingBs = Math.max(0, group.totalBs - memberSumBs);
   const cuotaSlices = [
     ...members.map((m) => ({
       id: m.id,
@@ -58,14 +62,14 @@ export function AdminScreen() {
       value: m.cuotaBs,
       label: m.customPct != null ? `${m.customPct}% · ${m.cuotaLabel}` : m.cuotaLabel,
     })),
-    ...(freeSlots > 0
+    ...(freeSlots > 0 && remainingBs > 0
       ? [
           {
             id: "free-slots",
             name: freeSlots === 1 ? "1 lugar libre" : `${freeSlots} lugares libres`,
             color: colors.textFaint,
-            value: group.defaultPerBs * freeSlots,
-            label: fmtBs(group.defaultPerBs * freeSlots),
+            value: remainingBs,
+            label: fmtBs(remainingBs),
           },
         ]
       : []),
@@ -96,7 +100,10 @@ export function AdminScreen() {
           newPct: draftAmt,
           editedId: priceFor,
           roster,
+          groupCurrency: groupRow.currency,
           totalBs: group.totalBs,
+          defaultPerBs: group.defaultPerBs,
+          rate: state.profile.exchange_rate,
           round: groupRow.round_cuota,
         })
       : null;
@@ -161,7 +168,7 @@ export function AdminScreen() {
         </Card>
 
         {/* How the monthly total splits across members (honors custom prices) */}
-        <CuotaDonut slices={cuotaSlices} />
+        <CuotaDonut slices={cuotaSlices} totalBs={group.totalBs} />
 
         {/* Approval alert */}
         {approvals.length > 0 && (

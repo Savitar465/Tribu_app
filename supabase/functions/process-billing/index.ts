@@ -131,12 +131,18 @@ Deno.serve(async (req) => {
       if (p.is_self) continue;
       if (p.billed_cycle === cycle) continue; // already settled this cycle
 
-      // A member's custom price (in its own currency — custom_currency, falling
-      // back to the group's) overrides the split, converted at the same rate
-      // and rounding rule as the group.
+      // A member's percentage of the group total takes precedence (recalculated
+      // at this cycle's rate); otherwise their custom price (in its own
+      // currency — custom_currency, falling back to the group's) overrides the
+      // split, converted at the same rate and rounding rule as the group.
       const custom = p.custom_amount != null ? Number(p.custom_amount) : null;
       const customCur = p.custom_currency ?? g.currency;
-      const customBs = custom != null && customCur === "USD" ? custom * (rate as number) : custom;
+      const customBs =
+        p.custom_pct != null
+          ? (totalBs * Number(p.custom_pct)) / 100
+          : custom != null && customCur === "USD"
+            ? custom * (rate as number)
+            : custom;
       const cuota =
         customBs != null ? (g.round_cuota ? Math.ceil(customBs) : customBs) : per;
 

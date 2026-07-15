@@ -114,6 +114,7 @@ export function buildGroup(state: State, group: GroupRow): GroupView {
     usdNote: k.isUsd ? `≈ ${fmtUsd(group.amount / group.members_target)}/persona · cobrado en USD` : "",
     isUsd: k.isUsd,
     perBs: myPer,
+    myPct: myRow?.custom_pct ?? null,
     defaultPerBs: k.per,
     totalBs: k.totalBs,
     qrImageUrl: group.qr_image_url,

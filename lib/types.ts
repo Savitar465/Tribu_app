@@ -72,6 +72,9 @@ export interface GroupView {
   isUsd: boolean;
   /** The viewer's own cuota (Bs) — honors their custom price when set. */
   perBs: number;
+  /** The viewer's admin-set percentage of the group total (null when their
+   * cuota isn't percentage-based). */
+  myPct: number | null;
   /** The group's default per-member split (Bs), ignoring custom prices. */
   defaultPerBs: number;
   totalBs: number;

@@ -188,21 +188,41 @@ export function assignedPct(
     .reduce((a, p) => a + p.custom_pct!, 0);
 }
 
-/** Validate a percentage-based cuota: the new pct plus all other members'
- * percentages must not exceed 100%, and the resulting Bs must fit within
- * the group's monthly total. */
+/** Validate a percentage-based cuota on both budgets: the new pct plus the
+ * other members' percentages must not exceed 100%, AND the resulting Bs can
+ * only take what the other members' cuotas (custom percentage, custom amount
+ * or the default split) leave of the monthly total — so assigning one member
+ * a percentage never eats into anyone else's price. `remainingPct` is the
+ * percentage still available (free slots included: their share isn't
+ * reserved, so a member may take it). */
 export function checkCustomPct(i: {
   newPct: number;
   editedId: string;
   roster: CustomPriceInput["roster"];
+  groupCurrency: "BOB" | "USD";
   totalBs: number;
+  defaultPerBs: number;
+  rate: number;
   round: boolean;
 }): { ok: boolean; remainingPct: number; resultBs: number } {
   const othersPct = assignedPct(i.roster, i.editedId);
-  const remainingPct = Math.max(0, 100 - othersPct);
   const resultBs = memberCuotaFromPct(i.newPct, i.totalBs, i.round);
+  const bs = checkCustomPrice({
+    newPerBs: resultBs,
+    editedId: i.editedId,
+    roster: i.roster,
+    groupCurrency: i.groupCurrency,
+    totalBs: i.totalBs,
+    defaultPerBs: i.defaultPerBs,
+    rate: i.rate,
+    round: i.round,
+  });
+  const remainingPct =
+    i.totalBs > 0
+      ? Math.max(0, Math.min(100 - othersPct, (bs.remaining / i.totalBs) * 100))
+      : 0;
   return {
-    ok: i.newPct <= remainingPct + 0.01,
+    ok: bs.ok && i.newPct <= 100 - othersPct + 0.01,
     remainingPct,
     resultBs,
   };
