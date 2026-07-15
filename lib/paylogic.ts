@@ -152,7 +152,21 @@ export interface CustomPriceInput {
  */
 export function checkCustomPrice(i: CustomPriceInput): { ok: boolean; remaining: number } {
   const others = i.roster.filter((p) => p.id !== i.editedId);
-  const assigned = others.reduce(
+  const assigned = othersCuotaBs(others, i);
+  const tolerance = i.round ? others.length + 1 : 0.01;
+  return {
+    ok: assigned + i.newPerBs <= i.totalBs + tolerance,
+    remaining: Math.max(0, i.totalBs - assigned),
+  };
+}
+
+/** Total Bs the given roster members take of the monthly cost — each at their
+ * custom percentage, custom fixed amount, or the default split. */
+function othersCuotaBs(
+  others: CustomPriceInput["roster"],
+  i: Pick<CustomPriceInput, "groupCurrency" | "totalBs" | "defaultPerBs" | "rate" | "round">,
+): number {
+  return others.reduce(
     (a, p) =>
       a +
       (p.custom_pct != null
@@ -162,11 +176,6 @@ export function checkCustomPrice(i: CustomPriceInput): { ok: boolean; remaining:
           : i.defaultPerBs),
     0,
   );
-  const tolerance = i.round ? others.length + 1 : 0.01;
-  return {
-    ok: assigned + i.newPerBs <= i.totalBs + tolerance,
-    remaining: Math.max(0, i.totalBs - assigned),
-  };
 }
 
 /**
@@ -178,24 +187,10 @@ export function memberCuotaFromPct(pct: number, totalBs: number, round: boolean)
   return round ? Math.ceil(bs) : bs;
 }
 
-/** Sum of percentages already assigned to roster members (excluding `editedId`). */
-export function assignedPct(
-  roster: { id: string; custom_pct: number | null }[],
-  editedId: string,
-): number {
-  return roster
-    .filter((p) => p.id !== editedId && p.custom_pct != null)
-    .reduce((a, p) => a + p.custom_pct!, 0);
-}
-
-/** Validate a percentage-based cuota on both budgets: the new pct plus the
- * other members' percentages must not exceed 100%, AND the resulting Bs can
- * only take what the other members' cuotas (custom percentage, custom amount
- * or the default split) leave of the monthly total — so assigning one member
- * a percentage never eats into anyone else's price. `remainingPct` is the
- * percentage still available (free slots included: their share isn't
- * reserved, so a member may take it). */
-export function checkCustomPct(i: {
+/** Input for `checkCustomPct`: like `CustomPriceInput` but the edited member's
+ * new price is a percentage of the group total instead of a Bs amount. */
+export interface CustomPctInput {
+  /** The edited member's new share, 0–100 (% of the group's monthly total). */
   newPct: number;
   editedId: string;
   roster: CustomPriceInput["roster"];
@@ -204,26 +199,38 @@ export function checkCustomPct(i: {
   defaultPerBs: number;
   rate: number;
   round: boolean;
-}): { ok: boolean; remainingPct: number; resultBs: number } {
-  const othersPct = assignedPct(i.roster, i.editedId);
+}
+
+/**
+ * Validate a percentage-based cuota against what the other roster members
+ * leave of the monthly total. Every other member consumes part of it — an
+ * explicit percentage, a fixed custom amount, or the default split — so their
+ * share is summed in Bs and expressed back as a percentage: `othersPct` is
+ * what they already take and `remainingPct` what is still assignable. With
+ * rounding on, each member's cuota may carry up to 1 Bs of round-up, so
+ * exactly that much excess is tolerated (mirrors `checkCustomPrice`).
+ */
+export function checkCustomPct(i: CustomPctInput): {
+  ok: boolean;
+  /** Share of the total the other members already consume (%). */
+  othersPct: number;
+  /** Share still assignable to the edited member (%). */
+  remainingPct: number;
+  /** Bs still assignable (the `remainingPct` expressed in money). */
+  remainingBs: number;
+  /** The edited member's resulting cuota in Bs. */
+  resultBs: number;
+} {
+  const others = i.roster.filter((p) => p.id !== i.editedId);
+  const assigned = othersCuotaBs(others, i);
   const resultBs = memberCuotaFromPct(i.newPct, i.totalBs, i.round);
-  const bs = checkCustomPrice({
-    newPerBs: resultBs,
-    editedId: i.editedId,
-    roster: i.roster,
-    groupCurrency: i.groupCurrency,
-    totalBs: i.totalBs,
-    defaultPerBs: i.defaultPerBs,
-    rate: i.rate,
-    round: i.round,
-  });
-  const remainingPct =
-    i.totalBs > 0
-      ? Math.max(0, Math.min(100 - othersPct, (bs.remaining / i.totalBs) * 100))
-      : 0;
+  const tolerance = i.round ? others.length + 1 : 0.01;
+  const othersPct = i.totalBs > 0 ? (assigned / i.totalBs) * 100 : 0;
   return {
-    ok: bs.ok && i.newPct <= 100 - othersPct + 0.01,
-    remainingPct,
+    ok: assigned + resultBs <= i.totalBs + tolerance,
+    othersPct,
+    remainingPct: Math.max(0, 100 - othersPct),
+    remainingBs: Math.max(0, i.totalBs - assigned),
     resultBs,
   };
 }

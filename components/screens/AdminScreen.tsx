@@ -15,7 +15,7 @@ import { CostEditor } from "@/components/screens/admin/CostEditor";
 import { CuotaDonut } from "@/components/screens/admin/CuotaDonut";
 import { PayMethodsEditor } from "@/components/screens/admin/PayMethodsEditor";
 import { fmtBs, sanitizeNumeric } from "@/lib/format";
-import { assignedPct, checkCustomPct, checkCustomPrice, memberCuotaBs } from "@/lib/paylogic";
+import { checkCustomPct, checkCustomPrice, memberCuotaBs } from "@/lib/paylogic";
 import { getApprovals, getCurrentGroup, getGroupArrears, getGroups, getMembers } from "@/lib/selectors";
 import { useApp } from "@/lib/store";
 import { ACCENT, colors } from "@/lib/theme";
@@ -94,10 +94,13 @@ export function AdminScreen() {
   const roster = state.participants.filter((p) => p.group_id === group.id);
 
   // --- Percentage mode derivations ---
-  const draftPctCheck =
-    priceFor !== null && groupRow && priceMode === "pct" && Number.isFinite(draftAmt) && draftAmt > 0
+  // Evaluated with pct 0 while the field is empty/invalid so the editor always
+  // shows what the other members consume and what's still assignable.
+  const draftPctValid = Number.isFinite(draftAmt) && draftAmt > 0;
+  const pctInfo =
+    priceFor !== null && groupRow && priceMode === "pct"
       ? checkCustomPct({
-          newPct: draftAmt,
+          newPct: draftPctValid ? draftAmt : 0,
           editedId: priceFor,
           roster,
           groupCurrency: groupRow.currency,
@@ -107,7 +110,6 @@ export function AdminScreen() {
           round: groupRow.round_cuota,
         })
       : null;
-  const othersPctSum = priceFor !== null ? assignedPct(roster, priceFor) : 0;
 
   // --- Fixed-amount mode derivations ---
   const draftBs =
@@ -565,21 +567,26 @@ export function AdminScreen() {
           fontWeight={700}
         />
 
-        {/* Live preview: percentage mode */}
-        {priceMode === "pct" && draftPctCheck && (
+        {/* Live preview: percentage mode. The "others / remaining" line counts
+            every pricing mode (percentages, fixed amounts, default splits). */}
+        {priceMode === "pct" && pctInfo && (
           <div
             style={{
               fontSize: 12,
               lineHeight: 1.5,
               marginTop: 10,
-              color: draftPctCheck.ok ? colors.textMuted : colors.danger,
+              color: pctInfo.ok ? colors.textMuted : colors.danger,
             }}
           >
-            Cuota resultante: <strong style={{ color: draftPctCheck.ok ? colors.textPrimary : colors.danger }}>{fmtBs(draftPctCheck.resultBs)}</strong>
-            {groupRow?.round_cuota ? " (redondeada)" : ""}
-            <br />
-            Porcentaje asignado a otros: <strong>{othersPctSum.toFixed(1)}%</strong> · disponible: <strong style={{ color: draftPctCheck.ok ? colors.positive : colors.danger }}>{draftPctCheck.remainingPct.toFixed(1)}%</strong>
-            {draftPctCheck.ok ? "" : " — supera el porcentaje disponible"}
+            {draftPctValid && (
+              <>
+                Cuota resultante: <strong style={{ color: pctInfo.ok ? colors.textPrimary : colors.danger }}>{fmtBs(pctInfo.resultBs)}</strong>
+                {groupRow?.round_cuota ? " (redondeada)" : ""}
+                <br />
+              </>
+            )}
+            Usado por los demás miembros: <strong>{pctInfo.othersPct.toFixed(1)}%</strong> · disponible: <strong style={{ color: pctInfo.ok ? colors.positive : colors.danger }}>{pctInfo.remainingPct.toFixed(1)}% ({fmtBs(pctInfo.remainingBs)})</strong>
+            {pctInfo.ok ? "" : " — supera el porcentaje disponible"}
           </div>
         )}
 

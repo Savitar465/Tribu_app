@@ -1419,7 +1419,7 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
             if (!check.ok) {
               dispatch({
                 type: "flash",
-                msg: `El porcentaje (${pctVal}%) supera el disponible: ${check.remainingPct.toFixed(1)}%`,
+                msg: `El porcentaje (${pctVal}%) supera el disponible: los demás miembros usan ${check.othersPct.toFixed(1)}% y queda ${check.remainingPct.toFixed(1)}% (${fmtBs(check.remainingBs)})`,
               });
               return false;
             }
