@@ -163,7 +163,7 @@ type Action =
   | { type: "applyParticipantBilling"; participantId: string; balance: number; paid: boolean; cycle: string }
   | { type: "applyCreateGroup"; group: GroupRow; participants: ParticipantRow[] }
   | { type: "applyDeleteGroup"; groupId: string }
-  | { type: "applyBilledCycle"; groupId: string; cycle: string; cuota: number }
+  | { type: "applyBilledCycle"; groupId: string; cycle: string; cuota: number; rate: number | null }
   | { type: "setNotifications"; notifications: NotificationRow[] }
   | { type: "markNotificationsRead" }
   | { type: "hydrate"; data: AppData };
@@ -528,7 +528,9 @@ function reducer(state: State, action: Action): State {
     }
     case "applyBilledCycle": {
       const groups = state.groups.map((g) =>
-        g.id === action.groupId ? { ...g, billed_cycle: action.cycle, billed_cuota: action.cuota } : g,
+        g.id === action.groupId
+          ? { ...g, billed_cycle: action.cycle, billed_cuota: action.cuota, billed_rate: action.rate }
+          : g,
       );
       return { ...state, groups };
     }
@@ -773,10 +775,11 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
         const mm = group?.due?.split("/")[1] ?? new Date().toLocaleDateString("en-CA").slice(5, 7);
         const due = `${String(day).padStart(2, "0")}/${mm}`;
         // If this month's charge already ran, re-freeze the cuota at the new
-        // cost (today's rate); otherwise clear the freeze so it previews live.
+        // cost (at the rate that charge used); otherwise clear the freeze so
+        // it previews live.
         let billedCuota: number | null = null;
         if (group?.billed_cycle === currentCycle()) {
-          const totalBs = s.editCur === "USD" ? amount * rate() : amount;
+          const totalBs = s.editCur === "USD" ? amount * (group.billed_rate ?? rate()) : amount;
           const n = Math.max(1, s.editMembers);
           billedCuota = s.editRound ? Math.ceil(totalBs / n) : totalBs / n;
         }
@@ -1666,8 +1669,8 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
 
             await api.insertCharges(supabase, chargeRows);
             await api.insertNotifications(supabase, notes);
-            await api.markGroupBilled(supabase, g.id, cycle, per);
-            dispatch({ type: "applyBilledCycle", groupId: g.id, cycle, cuota: per });
+            await api.markGroupBilled(supabase, g.id, cycle, per, rate);
+            dispatch({ type: "applyBilledCycle", groupId: g.id, cycle, cuota: per, rate });
           }
           // Refresh the ledger and the feed so this run's rows appear.
           dispatch({ type: "setCharges", charges: await api.fetchCharges(supabase) });

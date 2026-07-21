@@ -150,16 +150,18 @@ export async function insertNotifications(
   if (error) throw new Error(`insertNotifications: ${error.message}`);
 }
 
-/** Stamp a group's processed billing cycle and freeze the charged cuota (Bs). */
+/** Stamp a group's processed billing cycle and freeze the charged cuota (Bs)
+ * and the exchange rate it was charged at. */
 export async function markGroupBilled(
   supabase: SupabaseClient,
   groupId: string,
   cycle: string,
   cuota: number,
+  rate: number | null,
 ): Promise<void> {
   const { error } = await supabase
     .from("groups")
-    .update({ billed_cycle: cycle, billed_cuota: cuota })
+    .update({ billed_cycle: cycle, billed_cuota: cuota, billed_rate: rate })
     .eq("id", groupId);
   if (error) throw new Error(`markGroupBilled: ${error.message}`);
 }

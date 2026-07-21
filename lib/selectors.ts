@@ -47,13 +47,21 @@ export function cycleFlagsStale(group: GroupRow, now = new Date()) {
   return dueArrived && group.billed_cycle !== currentCycle();
 }
 
-/** A group's cost figures in bolivianos at the current rate. */
+/** The Bs-per-USD rate a group's figures display at: the rate frozen on its
+ * last billing day, so prices only move when a new charge runs. Today's rate
+ * only applies to groups that were never billed. */
+export function groupRate(group: GroupRow, todayRate: number) {
+  return group.billed_rate ?? todayRate;
+}
+
+/** A group's cost figures in bolivianos at its frozen billing rate. */
 function costOf(group: GroupRow, rate: number) {
-  const totalBs = group.currency === "USD" ? group.amount * rate : group.amount;
+  const fx = groupRate(group, rate);
+  const totalBs = group.currency === "USD" ? group.amount * fx : group.amount;
   const n = Math.max(1, group.members_target);
-  // Once this month's charge ran, the cuota stays frozen at the rate captured
-  // on the billing day; until then it previews at today's rate.
-  const frozen = group.billed_cycle === currentCycle() && group.billed_cuota != null;
+  // The cuota stays frozen at what the last charge billed until the next run
+  // (or a cost edit) overwrites it; only never-billed groups preview live.
+  const frozen = group.billed_cuota != null;
   const per = frozen
     ? (group.billed_cuota as number)
     : group.round_cuota
@@ -64,25 +72,21 @@ function costOf(group: GroupRow, rate: number) {
 }
 
 /** A member's cuota (Bs): their admin-set custom price when they have one —
- * frozen at this month's charge if already billed, previewed at today's rate
- * otherwise — or the group's default split. Percentage-based pricing
- * (`custom_pct`) takes precedence and recalculates at the current rate. */
+ * frozen at this month's charge if already billed, previewed at the group's
+ * frozen billing rate otherwise — or the group's default split.
+ * Percentage-based pricing (`custom_pct`) takes precedence. */
 function memberPer(state: State, group: GroupRow, p: ParticipantRow, defaultPer: number): number {
+  const fx = groupRate(group, state.profile.exchange_rate);
   if (p.custom_pct != null) {
     const charge = state.charges.find((c) => c.participant_id === p.id && c.cycle === currentCycle());
     if (charge) return charge.cuota;
-    const totalBs = group.currency === "USD" ? group.amount * state.profile.exchange_rate : group.amount;
+    const totalBs = group.currency === "USD" ? group.amount * fx : group.amount;
     return memberCuotaFromPct(p.custom_pct, totalBs, group.round_cuota);
   }
   if (p.custom_amount == null) return defaultPer;
   const charge = state.charges.find((c) => c.participant_id === p.id && c.cycle === currentCycle());
   if (charge) return charge.cuota;
-  return memberCuotaBs(
-    p.custom_amount,
-    p.custom_currency ?? group.currency,
-    state.profile.exchange_rate,
-    group.round_cuota,
-  );
+  return memberCuotaBs(p.custom_amount, p.custom_currency ?? group.currency, fx, group.round_cuota);
 }
 
 /** A participant's effective monthly cuota in Bs (custom price or default split). */
@@ -860,7 +864,8 @@ export function getEditView(state: State) {
             : baseMeta.mono,
       }
     : baseMeta;
-  const rate = state.profile.exchange_rate;
+  // Preview at the group's frozen billing rate, matching what saveEdit freezes.
+  const rate = group ? groupRate(group, state.profile.exchange_rate) : state.profile.exchange_rate;
   const amt = parseFloat(state.editAmount) || 0;
   const totalBs = state.editCur === "USD" ? amt * rate : amt;
   const n = Math.max(1, state.editMembers);

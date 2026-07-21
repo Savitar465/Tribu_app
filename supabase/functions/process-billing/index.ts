@@ -209,7 +209,7 @@ Deno.serve(async (req) => {
 
     const { error: uErr } = await supabase
       .from("groups")
-      .update({ billed_cycle: cycle, billed_cuota: per })
+      .update({ billed_cycle: cycle, billed_cuota: per, billed_rate: rate })
       .eq("id", g.id);
     if (uErr) {
       failures.push(`${g.id}: ${uErr.message}`);

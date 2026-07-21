@@ -34,6 +34,9 @@ export interface GroupRow {
   billed_cycle: string | null;
   /** Per-member cuota (Bs) frozen at the rate captured on the billing day. */
   billed_cuota: number | null;
+  /** Bs-per-USD rate used by the last billing run; null until first charge.
+   * Display converts at this rate so totals only move on the billing day. */
+  billed_rate: number | null;
   /** Public URL of the admin's payment QR image; null when not uploaded. */
   qr_image_url: string | null;
   /** PayPal email or paypal.me link for payments from abroad; null when unset. */

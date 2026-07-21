@@ -60,10 +60,12 @@ create table if not exists public.groups (
   color          text,
   -- Round each member's cuota up to the next whole Bs.
   round_cuota    boolean not null default false,
-  -- Last billing cycle processed (yyyy-mm) and the per-member cuota (Bs)
-  -- frozen at the rate captured on the billing day.
+  -- Last billing cycle processed (yyyy-mm), the per-member cuota (Bs) and the
+  -- Bs-per-USD rate frozen at the billing day — display converts at this rate
+  -- so totals only change when the next charge runs.
   billed_cycle   text,
   billed_cuota   numeric,
+  billed_rate    numeric,
   -- Public URL of the admin's payment QR image (bucket payment-qr).
   qr_image_url   text,
   -- International payment methods configured by the admin.
