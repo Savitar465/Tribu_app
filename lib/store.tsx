@@ -1584,8 +1584,13 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
       processBilling: async () => {
         const now = new Date();
         const cycle = now.toLocaleDateString("en-CA").slice(0, 7); // yyyy-mm
+        // Billing days beyond the month's length (29–31) come due on its last day.
+        const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
         const due = ref.current.groups.filter(
-          (g) => g.owner_id === userId && g.billed_cycle !== cycle && now.getDate() >= g.billing_day,
+          (g) =>
+            g.owner_id === userId &&
+            g.billed_cycle !== cycle &&
+            now.getDate() >= Math.min(g.billing_day, lastDay),
         );
         if (due.length === 0) return;
 
@@ -1712,9 +1717,17 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
 
   // On load: fetch the official BCB rate (for display) and adopt it once daily,
   // then run any monthly charges that came due for groups this user administers.
+  // Re-check whenever the app returns to the foreground: a PWA left open can
+  // cross a billing day without remounting, and the cycle stamps make the
+  // re-run idempotent.
   useEffect(() => {
     actions.initOfficialRate();
     actions.processBilling();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") actions.processBilling();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, [actions]);
 
   const value = useMemo(() => ({ state, actions }), [state, actions]);

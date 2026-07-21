@@ -37,6 +37,16 @@ function nextDueDate(billingDay: number, now = new Date()) {
   return new Date(y, m, Math.min(billingDay, lastDay));
 }
 
+/** True when a new cycle's charge already came due (its billing day arrived
+ * this month, clamped for short months) but the group hasn't been billed for
+ * it yet. Until that run lands, the roster's paid/proof flags still describe
+ * the previous cycle, so views must read them as reset. */
+export function cycleFlagsStale(group: GroupRow, now = new Date()) {
+  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const dueArrived = now.getDate() >= Math.min(group.billing_day, lastDay);
+  return dueArrived && group.billed_cycle !== currentCycle();
+}
+
 /** A group's cost figures in bolivianos at the current rate. */
 function costOf(group: GroupRow, rate: number) {
   const totalBs = group.currency === "USD" ? group.amount * rate : group.amount;
@@ -94,12 +104,14 @@ export function buildGroup(state: State, group: GroupRow): GroupView {
   const hasArrears = myRow
     ? state.charges.some((c) => c.participant_id === myRow.id && !c.paid && c.cycle < currentCycle())
     : false;
+  // Once a new cycle comes due, last cycle's paid/review flags no longer count.
+  const stale = cycleFlagsStale(group);
   const statusKey: StatusKey = myRow
-    ? myRow.proof_pending
+    ? myRow.proof_pending && !stale
       ? "review"
       : hasArrears
         ? "overdue"
-        : myRow.paid
+        : myRow.paid && !stale
           ? "paid"
           : "pending"
     : group.self_status;
@@ -139,8 +151,9 @@ export function buildGroup(state: State, group: GroupRow): GroupView {
     // Collection figures honor per-member custom prices: the target is the sum
     // of each roster member's cuota plus the default split for unfilled slots.
     const roster = participantsOf(state, group.id);
-    const paid = roster.filter((p) => p.paid).length;
-    const collected = roster.filter((p) => p.paid).reduce((a, p) => a + memberPer(state, group, p, k.per), 0);
+    const paidRows = roster.filter((p) => p.paid && !stale);
+    const paid = paidRows.length;
+    const collected = paidRows.reduce((a, p) => a + memberPer(state, group, p, k.per), 0);
     const targetBs =
       roster.reduce((a, p) => a + memberPer(state, group, p, k.per), 0) +
       k.per * Math.max(0, group.members_target - roster.length);
@@ -224,6 +237,8 @@ export function getMembers(state: State, accent: string) {
   const g = getCurrentGroup(state);
   const row = g ? state.groups.find((x) => x.id === g.id) : undefined;
   if (!g || !row) return [];
+  // Mirror buildGroup: once a new cycle is due, last cycle's flags read as reset.
+  const stale = cycleFlagsStale(row);
   return participantsOf(state, g.id).map((m) => {
     // What the member pays each month: percentage of total, fixed custom
     // price, or the group's default split — frozen at this month's charge once
@@ -282,10 +297,15 @@ export function getMembers(state: State, accent: string) {
       cuotaLabel: fmtBs(per),
       /** The member's effective monthly cuota in Bs (feeds the admin's donut). */
       cuotaBs: per,
-      paid: m.paid,
-      stLabel: m.paid ? "Pagado" : m.proof_pending ? "En revisión" : "Pendiente",
-      stColor: m.paid ? "#36d07a" : m.proof_pending ? "#7ba6ff" : "#f5b53d",
-      stBg: m.paid ? "rgba(54,208,122,0.14)" : m.proof_pending ? "rgba(123,166,255,0.14)" : "rgba(245,181,61,0.14)",
+      paid: m.paid && !stale,
+      stLabel: m.paid && !stale ? "Pagado" : m.proof_pending && !stale ? "En revisión" : "Pendiente",
+      stColor: m.paid && !stale ? "#36d07a" : m.proof_pending && !stale ? "#7ba6ff" : "#f5b53d",
+      stBg:
+        m.paid && !stale
+          ? "rgba(54,208,122,0.14)"
+          : m.proof_pending && !stale
+            ? "rgba(123,166,255,0.14)"
+            : "rgba(245,181,61,0.14)",
     };
   });
 }
@@ -522,8 +542,12 @@ export function getAdvancePreview(state: State, groupId: string, months: number)
     ? state.charges.filter((c) => c.participant_id === me.id && c.paid).map((c) => c.cycle)
     : [];
   // A member marked paid without a charge row (e.g. just-created group) still
-  // has this month covered — count it as settled for the preview.
-  if (me?.paid && !paidCycles.includes(currentCycle())) paidCycles.push(currentCycle());
+  // has this month covered — count it as settled for the preview, unless a new
+  // cycle already came due and the flag belongs to the previous one.
+  const row = state.groups.find((g) => g.id === groupId);
+  if (me?.paid && row && !cycleFlagsStale(row) && !paidCycles.includes(currentCycle())) {
+    paidCycles.push(currentCycle());
+  }
   const covered = advanceCoverage(paidCycles, currentCycle(), months);
   return { covered, coveredLabel: covered.map(cycleLabel).join(", ") };
 }

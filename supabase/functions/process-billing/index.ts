@@ -59,11 +59,16 @@ Deno.serve(async (req) => {
   const cycle = today.slice(0, 7);
   const day = Number(today.slice(8, 10));
   const month = new Date().toLocaleDateString("es", { month: "long", timeZone: "America/La_Paz" });
+  // Billing days beyond this month's length (29–31) come due on its last day —
+  // otherwise those groups would silently skip short months (e.g. day 31 in
+  // February) and never charge that cycle.
+  const [yy, mm] = [Number(today.slice(0, 4)), Number(today.slice(5, 7))];
+  const lastDay = new Date(yy, mm, 0).getDate();
 
   const { data: groups, error: gErr } = await supabase
     .from("groups")
     .select("*")
-    .lte("billing_day", day)
+    .lte("billing_day", day === lastDay ? 31 : day)
     .or(`billed_cycle.is.null,billed_cycle.neq.${cycle}`);
   if (gErr) return json(500, { error: gErr.message });
   const dueGroups = groups ?? [];
