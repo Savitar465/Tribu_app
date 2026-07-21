@@ -133,6 +133,28 @@ export function CostEditor({ group }: { group: GroupView }) {
             <Toggle value={state.editRound} onChange={actions.setEditRound} />
           </div>
 
+          {/* Variable monthly price (e.g. luz, agua): confirm before billing */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              marginTop: 12,
+              padding: "13px 14px",
+              borderRadius: 14,
+              background: colors.surface,
+              border: `1px solid ${colors.border}`,
+            }}
+          >
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: colors.textPrimary }}>Precio variable cada mes</div>
+              <div style={{ fontSize: 11.5, color: colors.textMuted, marginTop: 1 }}>
+                Ideal para luz, agua, etc. El día de cobro se te pedirá el precio del mes antes de cobrar.
+              </div>
+            </div>
+            <Toggle value={state.editVarPrice} onChange={actions.setEditVarPrice} />
+          </div>
+
           {/* FX shortcut (relevant for USD plans) */}
           {state.editCur === "USD" && (
             <div

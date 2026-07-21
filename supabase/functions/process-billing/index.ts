@@ -81,6 +81,26 @@ Deno.serve(async (req) => {
   const failures: string[] = [];
 
   for (const g of dueGroups) {
+    // Variable-price groups (e.g. luz, agua) are never charged at last month's
+    // amount: the charge waits until the admin confirms this cycle's price.
+    // Meanwhile the admin gets a single request notification per cycle.
+    if (g.variable_price && g.price_confirmed_cycle !== cycle) {
+      if (g.price_request_cycle !== cycle) {
+        const { error: nErr } = await supabase.from("notifications").insert({
+          user_id: g.owner_id,
+          group_id: g.id,
+          title: `Actualiza el precio · ${g.name}`,
+          body: `Llegó el día de cobro de ${month} y este grupo tiene precio variable. Actualiza el precio del mes desde el panel del grupo para generar el cobro.`,
+        });
+        if (nErr) {
+          failures.push(`${g.id}: ${nErr.message}`);
+          continue; // retried tomorrow
+        }
+        await supabase.from("groups").update({ price_request_cycle: cycle }).eq("id", g.id);
+      }
+      continue;
+    }
+
     const { data: roster, error: pErr } = await supabase
       .from("group_participants")
       .select("*")

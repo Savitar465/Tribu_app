@@ -50,6 +50,8 @@ export interface State {
   editBillingDay: string;
   /** Draft "round each cuota up to a whole Bs" flag for the group being edited. */
   editRound: boolean;
+  /** Draft "the price changes every month" flag for the group being edited. */
+  editVarPrice: boolean;
   rateDraft: string;
   /** True while fetching the official BCB rate. */
   rateLoading: boolean;
@@ -66,6 +68,8 @@ export interface State {
   createColor: string;
   /** Whether the creating admin occupies a subscription slot (self row). */
   createAdminIn: boolean;
+  /** Whether the new group's price changes every month (confirmed before billing). */
+  createVarPrice: boolean;
   /** Draft input (name or email) for the add-member modal. */
   memberDraft: string;
 
@@ -94,6 +98,7 @@ function initState(data: AppData): State {
     editMembers: 1,
     editBillingDay: "5",
     editRound: false,
+    editVarPrice: false,
     rateDraft: String(data.profile.exchange_rate),
     rateLoading: false,
     officialRate: null,
@@ -105,6 +110,7 @@ function initState(data: AppData): State {
     createCur: "BOB",
     createColor: MEMBER_COLORS[0],
     createAdminIn: true,
+    createVarPrice: false,
     memberDraft: "",
     toast: "",
     toastKey: 0,
@@ -124,6 +130,7 @@ type Action =
   | { type: "bumpMembers"; delta: number }
   | { type: "setEditBillingDay"; value: string }
   | { type: "setEditRound"; value: boolean }
+  | { type: "setEditVarPrice"; value: boolean }
   | { type: "openFx" }
   | { type: "setRateDraft"; value: string }
   | { type: "presetRate"; value: number }
@@ -134,6 +141,7 @@ type Action =
   | { type: "setCreateCur"; cur: Currency }
   | { type: "setCreateColor"; color: string }
   | { type: "setCreateAdminIn"; value: boolean }
+  | { type: "setCreateVarPrice"; value: boolean }
   | { type: "setMemberDraft"; value: string }
   // applied after a successful persist:
   | { type: "applyAddParticipant"; participant: ParticipantRow; members: number }
@@ -142,7 +150,9 @@ type Action =
   | { type: "applyMoveMember"; a: { id: string; sort: number }; b: { id: string; sort: number } }
   | { type: "applyMemberPaid"; participantId: string; paid: boolean }
   | { type: "applyMemberPrice"; participantId: string; amount: number | null; currency: Currency | null; pct: number | null }
-  | { type: "applyGroupCost"; groupId: string; amount: number; currency: Currency; members: number; billingDay: number; due: string; round: boolean; billedCuota: number | null }
+  | { type: "applyGroupCost"; groupId: string; amount: number; currency: Currency; members: number; billingDay: number; due: string; round: boolean; billedCuota: number | null; variablePrice: boolean }
+  | { type: "applyPriceConfirmed"; groupId: string; amount: number; cycle: string }
+  | { type: "applyPriceRequested"; groupId: string; cycle: string }
   | { type: "applyGroupQr"; groupId: string; url: string | null }
   | { type: "applyGroupPayMethods"; groupId: string; paypal: string | null; bank: string | null }
   | { type: "applyJointPay"; groupId: string; jointPay: boolean }
@@ -203,6 +213,7 @@ function reducer(state: State, action: Action): State {
         editMembers: g.members_target,
         editBillingDay: String(g.billing_day),
         editRound: g.round_cuota,
+        editVarPrice: g.variable_price,
       };
     }
     case "setEditAmount":
@@ -215,6 +226,8 @@ function reducer(state: State, action: Action): State {
       return { ...state, editBillingDay: sanitizeNumeric(action.value) };
     case "setEditRound":
       return { ...state, editRound: action.value };
+    case "setEditVarPrice":
+      return { ...state, editVarPrice: action.value };
 
     case "openFx":
       return { ...state, screen: "fx", rateDraft: String(state.profile.exchange_rate) };
@@ -249,6 +262,8 @@ function reducer(state: State, action: Action): State {
       return { ...state, createColor: action.color };
     case "setCreateAdminIn":
       return { ...state, createAdminIn: action.value };
+    case "setCreateVarPrice":
+      return { ...state, createVarPrice: action.value };
     case "setMemberDraft":
       return { ...state, memberDraft: action.value };
 
@@ -317,10 +332,25 @@ function reducer(state: State, action: Action): State {
               due: action.due,
               round_cuota: action.round,
               billed_cuota: action.billedCuota,
+              variable_price: action.variablePrice,
             }
           : g,
       );
       return flash({ ...state, groups }, "Costo mensual actualizado");
+    }
+    // The admin confirmed a variable-price group's amount for this cycle —
+    // the billing gate opens and the charge runs right after.
+    case "applyPriceConfirmed": {
+      const groups = state.groups.map((g) =>
+        g.id === action.groupId ? { ...g, amount: action.amount, price_confirmed_cycle: action.cycle } : g,
+      );
+      return flash({ ...state, groups }, "Precio del mes confirmado · generando el cobro");
+    }
+    case "applyPriceRequested": {
+      const groups = state.groups.map((g) =>
+        g.id === action.groupId ? { ...g, price_request_cycle: action.cycle } : g,
+      );
+      return { ...state, groups };
     }
     case "applyGroupQr": {
       const groups = state.groups.map((g) =>
@@ -607,8 +637,12 @@ export interface Actions {
   bumpMembers: (delta: number) => void;
   setEditBillingDay: (value: string) => void;
   setEditRound: (value: boolean) => void;
+  setEditVarPrice: (value: boolean) => void;
   /** Validate and persist the cost drafts. True on success. */
   saveEdit: () => Promise<boolean>;
+  /** Confirm the current variable-price group's amount for this cycle and run
+   * the pending charge immediately. True on success. */
+  confirmCyclePrice: (raw: string) => Promise<boolean>;
   /** Upload/replace the current group's payment QR image. True on success. */
   setGroupQr: (file: File) => Promise<boolean>;
   /** Delete the current group's payment QR image. */
@@ -646,6 +680,7 @@ export interface Actions {
   /** Soft-delete exported (already paid) charge rows. True on success. */
   deleteExportedCharges: (ids: string[]) => Promise<boolean>;
   setCreateAdminIn: (value: boolean) => void;
+  setCreateVarPrice: (value: boolean) => void;
   /** Submit a prepay of N months for admin approval (receipt required). An
    * admin's own prepay is credited to their balance instantly, no receipt. */
   submitPrepay: (months: number, proof: File | null) => void;
@@ -722,7 +757,7 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
       }
     };
 
-    return {
+    const acts: Actions = {
       go: (screen) => dispatch({ type: "navigate", screen }),
       back: () => dispatch({ type: "navigate", screen: BACK_MAP[ref.current.screen] ?? "home" }),
       open: (id) => dispatch({ type: "open", id }),
@@ -734,6 +769,7 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
       bumpMembers: (delta) => dispatch({ type: "bumpMembers", delta }),
       setEditBillingDay: (value) => dispatch({ type: "setEditBillingDay", value }),
       setEditRound: (value) => dispatch({ type: "setEditRound", value }),
+      setEditVarPrice: (value) => dispatch({ type: "setEditVarPrice", value }),
       openFx: () => dispatch({ type: "openFx" }),
       setRateDraft: (value) => dispatch({ type: "setRateDraft", value }),
       presetRate: (value) => dispatch({ type: "presetRate", value }),
@@ -792,6 +828,7 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
             due,
             round: s.editRound,
             billedCuota,
+            variablePrice: s.editVarPrice,
           });
           dispatch({
             type: "applyGroupCost",
@@ -803,7 +840,30 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
             due,
             round: s.editRound,
             billedCuota,
+            variablePrice: s.editVarPrice,
           });
+          return true;
+        } catch (e) {
+          fail(e);
+          return false;
+        }
+      },
+
+      // Variable-price groups: save this month's amount, open the billing gate
+      // for the current cycle and run the pending charge right away.
+      confirmCyclePrice: async (raw) => {
+        const g = currentGroup();
+        if (!g || g.owner_id !== userId) return false;
+        const amount = parseFloat(raw);
+        if (!Number.isFinite(amount) || amount <= 0) {
+          dispatch({ type: "flash", msg: "Ingresa el precio de este mes (mayor a 0)" });
+          return false;
+        }
+        const cycle = currentCycle();
+        try {
+          await api.confirmGroupPrice(supabase, g.id, amount, cycle);
+          dispatch({ type: "applyPriceConfirmed", groupId: g.id, amount, cycle });
+          await acts.processBilling();
           return true;
         } catch (e) {
           fail(e);
@@ -1086,6 +1146,7 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
       },
 
       setCreateAdminIn: (value) => dispatch({ type: "setCreateAdminIn", value }),
+      setCreateVarPrice: (value) => dispatch({ type: "setCreateVarPrice", value }),
 
       // A prepay covers N months at today's cuota; the receipt is required and
       // reviewed once — afterwards each monthly charge deducts from the balance.
@@ -1247,6 +1308,7 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
             // Only custom groups carry a per-group color; catalog services use their brand color.
             color: s.selService === "others" ? s.createColor : null,
             adminParticipates: s.createAdminIn,
+            variablePrice: s.createVarPrice,
           });
           dispatch({ type: "applyCreateGroup", group, participants });
         } catch (e) {
@@ -1589,17 +1651,51 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
         const cycle = now.toLocaleDateString("en-CA").slice(0, 7); // yyyy-mm
         // Billing days beyond the month's length (29–31) come due on its last day.
         const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-        const due = ref.current.groups.filter(
+        const month = now.toLocaleDateString("es", { month: "long" });
+        const arrived = ref.current.groups.filter(
           (g) =>
             g.owner_id === userId &&
             g.billed_cycle !== cycle &&
             now.getDate() >= Math.min(g.billing_day, lastDay),
         );
-        if (due.length === 0) return;
+        // Variable-price groups are never charged at last month's amount: the
+        // charge waits until this cycle's price is confirmed. The admin gets a
+        // single request notification per cycle (the Edge Function may have
+        // already sent it — `price_request_cycle` dedupes across both runners).
+        const awaiting = arrived.filter((g) => g.variable_price && g.price_confirmed_cycle !== cycle);
+        const due = arrived.filter((g) => !awaiting.includes(g));
+        let requested = false;
+        for (const g of awaiting) {
+          if (g.price_request_cycle === cycle) continue;
+          try {
+            await api.insertNotifications(supabase, [
+              {
+                user_id: userId,
+                group_id: g.id,
+                title: `Actualiza el precio · ${g.name}`,
+                body: `Llegó el día de cobro de ${month} y este grupo tiene precio variable. Actualiza el precio del mes desde el panel del grupo para generar el cobro.`,
+              },
+            ]);
+            await api.markPriceRequested(supabase, g.id, cycle);
+            dispatch({ type: "applyPriceRequested", groupId: g.id, cycle });
+            requested = true;
+          } catch {
+            // Silent — retried on the next run.
+          }
+        }
+        if (due.length === 0) {
+          if (requested) {
+            try {
+              dispatch({ type: "setNotifications", notifications: await api.fetchNotifications(supabase) });
+            } catch {
+              // Silent — the feed refreshes on the next fetch.
+            }
+          }
+          return;
+        }
 
         await syncOfficial(true); // a charge always uses today's official rate
         const rate = ref.current.profile.exchange_rate;
-        const month = now.toLocaleDateString("es", { month: "long" });
 
         try {
           for (const g of due) {
@@ -1709,6 +1805,7 @@ export function AppProvider({ initialData, children }: { initialData: AppData; c
         }
       },
     };
+    return acts;
   }, [supabase, userId]);
 
   // Auto-dismiss the toast 2.6s after each flash.

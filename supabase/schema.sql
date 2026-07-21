@@ -78,6 +78,13 @@ create table if not exists public.groups (
   joint_pay      boolean not null default false,
   -- True on the single group whose payment methods the joint bundle uses.
   joint_method   boolean not null default false,
+  -- Variable monthly price (e.g. luz, agua): billing waits until the admin
+  -- confirms this month's price. `price_confirmed_cycle` is the last cycle
+  -- (yyyy-mm) whose price was confirmed; `price_request_cycle` dedupes the
+  -- "update the price" notification across billing runs.
+  variable_price boolean not null default false,
+  price_confirmed_cycle text,
+  price_request_cycle   text,
   created_at     timestamptz not null default now()
 );
 create index if not exists groups_owner_idx on public.groups (owner_id);

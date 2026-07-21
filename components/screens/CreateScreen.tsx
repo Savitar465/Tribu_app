@@ -149,6 +149,55 @@ export function CreateScreen() {
             />
           </div>
         </div>
+
+        {/* Variable monthly price (e.g. luz, agua): confirm before each billing */}
+        <div
+          onClick={() => actions.setCreateVarPrice(!state.createVarPrice)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            padding: "13px 15px",
+            borderRadius: 14,
+            background: colors.surface,
+            border: `1px solid ${colors.hairline}`,
+            cursor: "pointer",
+          }}
+        >
+          <div>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: colors.textPrimary }}>
+              Precio variable cada mes
+            </div>
+            <div style={{ fontSize: 11.5, color: colors.textMuted, marginTop: 1 }}>
+              Ideal para luz, agua, etc. Cada mes confirmas el precio antes de cobrar.
+            </div>
+          </div>
+          <div
+            style={{
+              width: 40,
+              height: 24,
+              borderRadius: 999,
+              background: state.createVarPrice ? ACCENT : colors.surface3,
+              position: "relative",
+              transition: "background 0.15s",
+              flexShrink: 0,
+            }}
+          >
+            <div
+              style={{
+                position: "absolute",
+                top: 3,
+                left: state.createVarPrice ? 19 : 3,
+                width: 18,
+                height: 18,
+                borderRadius: "50%",
+                background: "#fff",
+                transition: "left 0.15s",
+              }}
+            />
+          </div>
+        </div>
       </div>
 
       {/* Live per-member preview */}

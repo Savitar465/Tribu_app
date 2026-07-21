@@ -189,6 +189,8 @@ export async function updateGroupCost(
     round: boolean;
     /** New frozen cuota when the group was already billed this cycle (null clears the freeze). */
     billedCuota: number | null;
+    /** Whether the monthly amount changes every cycle (admin confirms it before billing). */
+    variablePrice: boolean;
   },
 ): Promise<void> {
   const { error } = await supabase
@@ -201,9 +203,39 @@ export async function updateGroupCost(
       due: values.due,
       round_cuota: values.round,
       billed_cuota: values.billedCuota,
+      variable_price: values.variablePrice,
     })
     .eq("id", groupId);
   if (error) throw new Error(`updateGroupCost: ${error.message}`);
+}
+
+/** Confirm a variable-price group's amount for a cycle: saves this month's
+ * price and stamps the cycle so the billing processors may charge it. */
+export async function confirmGroupPrice(
+  supabase: SupabaseClient,
+  groupId: string,
+  amount: number,
+  cycle: string,
+): Promise<void> {
+  const { error } = await supabase
+    .from("groups")
+    .update({ amount, price_confirmed_cycle: cycle })
+    .eq("id", groupId);
+  if (error) throw new Error(`confirmGroupPrice: ${error.message}`);
+}
+
+/** Stamp the cycle a variable-price group's admin was asked to update the
+ * price for (so the request notification is sent once per cycle). */
+export async function markPriceRequested(
+  supabase: SupabaseClient,
+  groupId: string,
+  cycle: string,
+): Promise<void> {
+  const { error } = await supabase
+    .from("groups")
+    .update({ price_request_cycle: cycle })
+    .eq("id", groupId);
+  if (error) throw new Error(`markPriceRequested: ${error.message}`);
 }
 
 /** Storage bucket holding per-group payment QR images (see 0014_group_qr.sql). */
@@ -405,6 +437,8 @@ export async function createGroup(
     color: string | null;
     /** False → the admin manages the plan without occupying a slot (no self row). */
     adminParticipates: boolean;
+    /** Whether the monthly amount changes every cycle (admin confirms it before billing). */
+    variablePrice: boolean;
   },
 ): Promise<{ group: GroupRow; participants: ParticipantRow[] }> {
   const insertGroup = await supabase
@@ -422,6 +456,7 @@ export async function createGroup(
       due: values.due,
       color: values.color,
       admin_participates: values.adminParticipates,
+      variable_price: values.variablePrice,
     })
     .select("*")
     .single();

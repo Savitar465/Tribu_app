@@ -16,7 +16,7 @@ import { CuotaDonut } from "@/components/screens/admin/CuotaDonut";
 import { PayMethodsEditor } from "@/components/screens/admin/PayMethodsEditor";
 import { fmtBs, sanitizeNumeric } from "@/lib/format";
 import { checkCustomPct, checkCustomPrice, memberCuotaBs } from "@/lib/paylogic";
-import { getApprovals, getCurrentGroup, getGroupArrears, getGroups, getMembers } from "@/lib/selectors";
+import { currentCycle, cycleFlagsStale, cycleLabel, getApprovals, getCurrentGroup, getGroupArrears, getGroups, getMembers } from "@/lib/selectors";
 import { useApp } from "@/lib/store";
 import { ACCENT, colors } from "@/lib/theme";
 import type { Currency } from "@/lib/types";
@@ -35,6 +35,9 @@ export function AdminScreen() {
   const [priceSaving, setPriceSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  /** Draft for the variable-price confirmation (null = show the current amount). */
+  const [varDraft, setVarDraft] = useState<string | null>(null);
+  const [varSaving, setVarSaving] = useState(false);
   const group = getCurrentGroup(state);
   const members = getMembers(state, ACCENT);
   const approvals = getApprovals(state);
@@ -130,6 +133,14 @@ export function AdminScreen() {
         })
       : null;
 
+  // Variable-price gate: the cycle came due but this month's price hasn't been
+  // confirmed yet, so the charge is on hold until the admin confirms it here.
+  const pricePending =
+    !!groupRow?.variable_price &&
+    cycleFlagsStale(groupRow) &&
+    groupRow.price_confirmed_cycle !== currentCycle();
+  const varValue = varDraft ?? String(groupRow?.amount ?? "");
+
   return (
     <ScreenShell padding="0 0 28px">
       {/* Header band */}
@@ -149,6 +160,48 @@ export function AdminScreen() {
       </div>
 
       <div style={{ padding: "0 18px" }}>
+        {/* Variable price: this month's charge waits for the confirmed price */}
+        {pricePending && groupRow && (
+          <div
+            style={{
+              background: "rgba(245,181,61,0.1)",
+              border: "1px solid rgba(245,181,61,0.35)",
+              borderRadius: 16,
+              padding: 16,
+              marginBottom: 14,
+            }}
+          >
+            <div style={{ fontSize: 14, fontWeight: 800, color: colors.textPrimary }}>
+              Confirma el precio de {cycleLabel(currentCycle())}
+            </div>
+            <div style={{ fontSize: 12, color: colors.textMuted, lineHeight: 1.5, margin: "4px 0 12px" }}>
+              Este grupo tiene precio variable: el cobro del mes no se genera hasta que
+              actualices el precio. Revisa el monto y confírmalo para cobrar a los miembros.
+            </div>
+            <TextField
+              label={`Precio de este mes (${groupRow.currency === "USD" ? "USD" : "Bs"})`}
+              value={varValue}
+              onChange={(v) => setVarDraft(sanitizeNumeric(v))}
+              inputMode="decimal"
+              fontWeight={800}
+              fontSize={20}
+            />
+            <Button
+              variant="success"
+              disabled={varSaving || !(parseFloat(varValue) > 0)}
+              onClick={async () => {
+                setVarSaving(true);
+                const ok = await actions.confirmCyclePrice(varValue);
+                setVarSaving(false);
+                if (ok) setVarDraft(null);
+              }}
+              style={{ marginTop: 12, padding: 13, fontSize: 14 }}
+            >
+              {varSaving ? "Generando cobro…" : "Confirmar precio y generar cobro"}
+            </Button>
+          </div>
+        )}
+
         {/* Collection */}
         <Card padding={20} radius={22} style={{ marginBottom: 14 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>

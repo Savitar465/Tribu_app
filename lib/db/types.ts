@@ -51,6 +51,15 @@ export interface GroupRow {
   /** True on the single group whose payment methods (QR/PayPal/bank) the
    * owner's joint-payment bundle uses. */
   joint_method: boolean;
+  /** True when the monthly amount changes every cycle (e.g. luz, agua):
+   * billing waits until the admin confirms this month's price. */
+  variable_price: boolean;
+  /** Last cycle (yyyy-mm) whose price the admin confirmed; a variable-price
+   * group is only billed when it matches the current cycle. */
+  price_confirmed_cycle: string | null;
+  /** Last cycle (yyyy-mm) the admin was asked to update the price for
+   * (dedupes the request notification across billing runs). */
+  price_request_cycle: string | null;
   created_at: string;
 }
 
