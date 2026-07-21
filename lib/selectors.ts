@@ -27,6 +27,16 @@ export function cycleShort(cycle: string) {
   return new Date(`${cycle}-02T12:00:00`).toLocaleDateString("es", { month: "short" });
 }
 
+/** Next occurrence of the group's billing day: today or later this month when
+ * it hasn't passed yet, otherwise next month (clamped for short months). */
+function nextDueDate(billingDay: number, now = new Date()) {
+  const roll = now.getDate() > billingDay ? 1 : 0;
+  const y = now.getFullYear();
+  const m = now.getMonth() + roll;
+  const lastDay = new Date(y, m + 1, 0).getDate();
+  return new Date(y, m, Math.min(billingDay, lastDay));
+}
+
 /** A group's cost figures in bolivianos at the current rate. */
 function costOf(group: GroupRow, rate: number) {
   const totalBs = group.currency === "USD" ? group.amount * rate : group.amount;
@@ -97,6 +107,9 @@ export function buildGroup(state: State, group: GroupRow): GroupView {
   const color = group.color ?? meta.color;
   const mono =
     group.service_id === "others" ? group.name.trim().charAt(0).toUpperCase() || meta.mono : meta.mono;
+  // The displayed due date always advances to the next billing-day occurrence;
+  // the stored `groups.due` text is legacy and would go stale once a cycle passed.
+  const dueDate = nextDueDate(group.billing_day);
 
   const view: GroupView = {
     id: group.id,
@@ -105,7 +118,8 @@ export function buildGroup(state: State, group: GroupRow): GroupView {
     color,
     name: group.name || meta.name,
     plan: meta.plan,
-    due: group.due ?? meta.due,
+    due: `${String(dueDate.getDate()).padStart(2, "0")}/${String(dueDate.getMonth() + 1).padStart(2, "0")}`,
+    dueYear: String(dueDate.getFullYear()),
     owned,
     statusKey,
     cuota: fmtBs(myPer),

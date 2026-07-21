@@ -113,7 +113,7 @@ export function GroupScreen() {
             {group.cuota}
           </div>
           <StatusBadge label={st.label} bg={st.bg} color={st.color} style={{ padding: "5px 14px", fontSize: 13 }} />
-          <div style={{ fontSize: 12.5, color: colors.textMuted, marginTop: 12 }}>Vence el {group.due}/2026</div>
+          <div style={{ fontSize: 12.5, color: colors.textMuted, marginTop: 12 }}>Vence el {group.due}/{group.dueYear}</div>
           {prepaid && prepaid.pendingAmount != null && (
             <div
               style={{

@@ -60,7 +60,10 @@ export interface GroupView {
   color: string;
   name: string;
   plan: string;
+  /** Next due date, formatted `dd/mm` (always the upcoming billing-day occurrence). */
   due: string;
+  /** Year of the next due date, e.g. "2026". */
+  dueYear: string;
   owned: boolean;
   statusKey: StatusKey;
   /** Per-member share, formatted (e.g. "10 Bs"). */
